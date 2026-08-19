@@ -75,7 +75,13 @@ let r = await call(route, 'GET', '/gitlab-tools/status')
 assert(r.status === 200 && r.json.ok === true && r.json.configured === true, 'GET /status → configured=true')
 
 r = await call(route, 'GET', '/gitlab-tools/settings')
-assert(r.status === 200 && r.json.ok === true && r.json.defaultProject === '' && r.json.refreshMs === 120000, 'GET /settings → defaults')
+assert(r.status === 200 && r.json.ok === true && r.json.defaultProject === '' && r.json.host === 'https://gl.example.com' && r.json.refreshMs === 120000, 'GET /settings → defaults (host = config fallback)')
+
+r = await call(route, 'POST', '/gitlab-tools/settings', { host: 'https://new.example.com:8443' })
+assert(r.status === 200 && r.json.ok === true && r.json.host === 'https://new.example.com:8443', 'POST /settings → persists host')
+
+r = await call(route, 'POST', '/gitlab-tools/settings', { host: 12345 })
+assert(r.status === 400 && r.json.code === 'config', 'POST /settings → rejects non-string host')
 
 r = await call(route, 'POST', '/gitlab-tools/settings', { defaultProject: 'group/proj', refreshMs: 300000 })
 assert(r.status === 200 && r.json.ok === true && r.json.defaultProject === 'group/proj', 'POST /settings → persists defaultProject')

@@ -35,6 +35,7 @@ type Issue = {
 type SettingsResp = {
   ok: boolean;
   defaultProject?: string;
+  host?: string;
   refreshMs?: number;
   configured?: boolean;
   code?: string;
@@ -390,7 +391,7 @@ function GitLabIssuesTab({ visible }: { visible: boolean }) {
 // ---- settings page ----
 
 function SettingsCard() {
-  const [cfg, setCfg] = useState({ defaultProject: "", refreshMs: 120000 });
+  const [cfg, setCfg] = useState({ defaultProject: "", host: "", refreshMs: 120000 });
   const [status, setStatus] = useState({
     loading: true,
     saving: false,
@@ -412,6 +413,7 @@ function SettingsCard() {
         if (json && json.ok === true) {
           setCfg((prev) => ({
             defaultProject: json.defaultProject ?? prev.defaultProject,
+            host: json.host ?? prev.host,
             refreshMs: json.refreshMs ?? prev.refreshMs,
           }));
         }
@@ -428,7 +430,7 @@ function SettingsCard() {
     fetch("/gitlab-tools/settings", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ defaultProject: cfg.defaultProject.trim(), refreshMs: cfg.refreshMs }),
+      body: JSON.stringify({ defaultProject: cfg.defaultProject.trim(), host: cfg.host.trim(), refreshMs: cfg.refreshMs }),
     })
       .then((r) => r.json())
       .then((json) => {
@@ -472,9 +474,22 @@ function SettingsCard() {
       </div>
 
       <div style={{ fontSize: "11px", lineHeight: "16px", color: C.label3 }}>
-        host/token 在 profile patch 的 gitlab-tools config 里配置（不会下发到浏览器）。这里只配置面板展示用项，
-        保存后立即生效（无需重启），侧边栏的 GitLab Issues 标签会自动刷新。
+        服务器地址（host）在此配置，保存后立即生效（无需重启）；token 仍在 profile patch 的
+        gitlab-tools config 里配置（不会下发到浏览器）。侧边栏的 GitLab Issues 标签会自动刷新。
       </div>
+
+      <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
+        <span>服务器地址（GitLab base URL，含端口，如 https://gitlab.example.com:8443）</span>
+        <input
+          type="text"
+          autoComplete="off"
+          spellCheck={false}
+          placeholder="https://gitlab.example.com:8443"
+          value={cfg.host}
+          onChange={(e) => setCfg((prev) => ({ ...prev, host: e.target.value }))}
+          style={inputStyle}
+        />
+      </label>
 
       <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
         <span>默认项目（path_with_namespace，如 group/project；留空则不展示）</span>
