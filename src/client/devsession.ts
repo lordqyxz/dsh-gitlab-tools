@@ -2,8 +2,39 @@
 // session has a suitable working directory) auto-start a new dev session that
 // implements the issue. No host changes needed — pure client via ctx.get("sessions").
 
-import type { DevNotice, Issue } from "./types";
+import type { DevNotice, Issue, ProjectDir } from "./types";
 import { registerIssueSession } from "./session-store";
+
+type WorkspaceItem = { workspaceId: string; path?: string };
+type WorkspacesSvc = { list?: { getSnapshot?: () => { items?: WorkspaceItem[] } | undefined } };
+
+/** Normalize a project path for comparison (group/project; case-insensitive). */
+function normProject(p?: string): string {
+  return (p ?? "").trim().toLowerCase();
+}
+
+/**
+ * Resolve the DSH workspace that owns `cwd` (exact path match first, then the
+ * longest workspace path that contains it). Returns undefined when no workspace
+ * matches — caller then falls back to creating with a bare `cwd`.
+ */
+export function resolveWorkspaceId(ctx: unknown, cwd: string): string | undefined {
+  const workspaces = ((ctx as { get?: (name: string) => unknown })?.get?.("workspaces")) as WorkspacesSvc | undefined;
+  const items = workspaces?.list?.getSnapshot?.()?.items ?? [];
+  if (!items.length) return undefined;
+  const norm = (p: string) => p.replace(/[\\/]+$/, "");
+  const base = norm(cwd);
+  let best: { workspaceId: string; path: string } | undefined;
+  for (const w of items) {
+    const p = w.path ? norm(w.path) : "";
+    if (!p) continue;
+    if (p === base) return w.workspaceId; // exact match
+    if (base === p || base.startsWith(p + "/") || base.startsWith(p + "\\")) {
+      if (!best || p.length > best.path.length) best = { workspaceId: w.workspaceId, path: p };
+    }
+  }
+  return best?.workspaceId;
+}
 
 /** Build the task prompt handed to the new dev session (auto-started when suitable). */
 export function buildPrompt(issue: Issue, project?: string, cwd?: string): string {
@@ -36,18 +67,24 @@ export function buildPrompt(issue: Issue, project?: string, cwd?: string): strin
 }
 
 /**
- * Auto-check then act: if the current session has a working directory, create a
- * new dev session there and auto-send the issue task (the agent starts working);
- * otherwise do NOT auto-start — return the prompt for the user to copy instead.
+ * Auto-check then act: if we can pick a working directory (the configured
+ * project→folder mapping first, else the current session's cwd), create a new
+ * dev session there and auto-send the issue task. Otherwise do NOT auto-start —
+ * return the prompt for the user to copy instead.
+ *
+ * Grouping: the new session is created with the resolved `workspaceId` of the
+ * target folder (not a bare `cwd`), so it lands in the correct workspace group;
+ * a bare `cwd` can attach to a wrong/default group.
  */
 export async function createDevSession(
   ctx: unknown,
   scope: { sessionId?: string; cwd?: string } | undefined,
   issue: Issue,
-  project?: string
+  project?: string,
+  projectDirs?: ProjectDir[]
 ): Promise<DevNotice> {
   type Sessions = {
-    create?: (opts: { cwd?: string }) => Promise<string>;
+    create?: (opts: { cwd?: string; workspaceId?: string }) => Promise<string>;
     open?: (id: string) => void;
     binding?: (id: string) => { session?: { prompt?: (content: unknown[], mode: string) => Promise<unknown> } };
   };
@@ -55,18 +92,21 @@ export async function createDevSession(
   if (!sessions || typeof sessions.create !== "function") {
     return { kind: "err", text: "DSH 会话服务不可用，无法创建开发会话" };
   }
-  const cwd = scope?.cwd;
+  // Target folder: configured project→folder mapping wins, else current cwd.
+  const mapped = (projectDirs ?? []).find((m) => normProject(m.project) === normProject(project));
+  const cwd = (mapped?.dir && mapped.dir.trim()) || scope?.cwd;
   const suitable = typeof cwd === "string" && cwd.trim() !== "";
   const prompt = buildPrompt(issue, project, cwd);
   try {
     if (!suitable) {
       return {
         kind: "warn",
-        text: "当前会话没有工作目录，不适合自动启动开发任务。请先在会话里设置工作目录，或复制下方提示词手动发送。",
+        text: "无法确定项目工作目录（未配置项目→文件夹映射，当前会话也没有工作目录）。请到 设置 → GitLab Issues 配置项目文件夹，或复制下方提示词手动发送。",
         prompt,
       };
     }
-    const sessionId = await sessions.create({ cwd });
+    const workspaceId = resolveWorkspaceId(ctx, cwd);
+    const sessionId = await sessions.create(workspaceId ? { workspaceId } : { cwd });
     if (typeof sessionId !== "string" || !sessionId) {
       return { kind: "err", text: "创建会话失败（未返回 sessionId）" };
     }

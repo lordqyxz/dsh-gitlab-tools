@@ -170,18 +170,24 @@ export const ghostBtnStyle: CSSProperties = {
   border: `1px solid ${C.border}`,
 };
 
-/** Per-issue "create dev session" ghost button (square, brand-colored glyph). */
+/**
+ * Per-issue dev-session action button — an actual button, not a ghost icon:
+ * solid surface + visible border + subtle shadow so it reads as clickable.
+ * Callers tint `background`/`color`/`borderColor` per action (brand=start,
+ * err=stop, neutral=open).
+ */
 export const rowDevBtnStyle: CSSProperties = {
   flex: "none",
-  width: "26px",
-  height: "26px",
+  width: "28px",
+  height: "28px",
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
   padding: "0",
-  border: "none",
-  borderRadius: "6px",
+  border: `1px solid ${C.border}`,
+  borderRadius: "7px",
   cursor: "pointer",
-  background: "transparent",
+  background: C.surface,
   color: C.brand,
+  boxShadow: "0 1px 2px rgba(0,0,0,0.12)",
 };

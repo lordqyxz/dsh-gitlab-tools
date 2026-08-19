@@ -6,7 +6,7 @@ import { IssueMark } from "./icons";
 import { refreshSignal } from "./state";
 import { TokenField } from "./token-fields";
 import { C, ghostBtnStyle, inputStyle } from "./theme";
-import type { SettingsResp } from "./types";
+import type { ProjectDir, SettingsResp } from "./types";
 
 type SettingsCfg = {
   defaultProject: string;
@@ -16,6 +16,7 @@ type SettingsCfg = {
   aiToken: string;
   clearAiToken: boolean;
   refreshMs: number;
+  projectDirs: ProjectDir[];
 };
 
 type TestResult = { ok: boolean; text: string } | null;
@@ -29,6 +30,7 @@ export function SettingsCard() {
     aiToken: "",
     clearAiToken: false,
     refreshMs: 120000,
+    projectDirs: [],
   });
   const [status, setStatus] = useState<{
     loading: boolean;
@@ -65,6 +67,7 @@ export function SettingsCard() {
             defaultProject: json.defaultProject ?? prev.defaultProject,
             host: json.host ?? prev.host,
             refreshMs: json.refreshMs ?? prev.refreshMs,
+            projectDirs: Array.isArray(json.projectDirs) ? json.projectDirs : prev.projectDirs,
           }));
           setStatus((prev) => ({
             ...prev,
@@ -84,10 +87,13 @@ export function SettingsCard() {
 
   const onSave = () => {
     setStatus((prev) => ({ ...prev, saving: true, msg: null }));
-    const payload: Record<string, string | number> = {
+    const payload: Record<string, unknown> = {
       defaultProject: (cfg.defaultProject || "").trim(),
       host: (cfg.host || "").trim(),
       refreshMs: cfg.refreshMs,
+      projectDirs: cfg.projectDirs
+        .map((r) => ({ project: (r.project || "").trim(), dir: (r.dir || "").trim() }))
+        .filter((r) => r.project && r.dir),
     };
     if (cfg.clearToken) {
       payload.token = ""; // 清除已保存 token，回落到 profile patch config
@@ -230,6 +236,59 @@ export function SettingsCard() {
           <option value={600000}>10 分钟</option>
         </select>
       </label>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+        <span style={{ fontSize: "11px", lineHeight: "16px", color: C.label2 }}>项目 → 本地文件夹映射</span>
+        <span style={{ fontSize: "10.5px", lineHeight: "15px", color: C.caption }}>
+          创建开发会话时按此把会话放进对应项目的工作区分组（左侧填项目 path，如 group/project；右侧填本地文件夹路径）。
+        </span>
+        {cfg.projectDirs.map((row, i) => (
+          <div key={i} style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="group/project"
+              value={row.project}
+              onChange={(e) => setCfg((prev) => {
+                const next = [...prev.projectDirs];
+                next[i] = { ...next[i], project: e.target.value };
+                return { ...prev, projectDirs: next };
+              })}
+              style={{ ...inputStyle, flex: "1 1 45%", minWidth: "0" }}
+            />
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="/absolute/path/to/repo"
+              value={row.dir}
+              onChange={(e) => setCfg((prev) => {
+                const next = [...prev.projectDirs];
+                next[i] = { ...next[i], dir: e.target.value };
+                return { ...prev, projectDirs: next };
+              })}
+              style={{ ...inputStyle, flex: "1 1 45%", minWidth: "0" }}
+            />
+            <button
+              type="button"
+              title="删除该映射"
+              aria-label="删除该映射"
+              onClick={() => setCfg((prev) => ({ ...prev, projectDirs: prev.projectDirs.filter((_, j) => j !== i) }))}
+              style={{ ...ghostBtnStyle, background: "transparent", color: C.err, flex: "none" }}
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() => setCfg((prev) => ({ ...prev, projectDirs: [...prev.projectDirs, { project: "", dir: "" }] }))}
+          style={{ ...ghostBtnStyle, background: "transparent", color: C.label2, alignSelf: "flex-start" }}
+        >
+          + 添加映射
+        </button>
+      </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
         <button

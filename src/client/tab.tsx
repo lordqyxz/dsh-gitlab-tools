@@ -67,13 +67,13 @@ export function GitLabIssuesTab({ ctx, scope, visible }: {
       if (busy) return;
       setBusy(true);
       try {
-        const n = await createDevSession(ctx, scope, issue, project);
+        const n = await createDevSession(ctx, scope, issue, project, settings?.projectDirs);
         setNotice(n);
       } finally {
         setBusy(false);
       }
     },
-    [busy, ctx, scope, project]
+    [busy, ctx, scope, project, settings]
   );
 
   const openNoticeSession = useCallback(() => {

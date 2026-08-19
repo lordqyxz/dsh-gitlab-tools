@@ -38,11 +38,15 @@ export type Note = {
   author: { username: string; name?: string } | null;
 };
 
+/** Project (path_with_namespace) → local folder, used to place dev sessions. */
+export type ProjectDir = { project: string; dir: string };
+
 export type SettingsResp = {
   ok: boolean;
   defaultProject?: string;
   host?: string;
   refreshMs?: number;
+  projectDirs?: ProjectDir[];
   configured?: boolean;
   tokenConfigured?: boolean;
   aiTokenConfigured?: boolean;

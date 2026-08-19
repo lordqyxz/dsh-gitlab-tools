@@ -26,7 +26,7 @@ dsh-gitlab-tools (cordis 插件)
 
 - **better-sidebar 标签**（`ctx.get('betterSidebar').registerTab`，id `gitlab-tools:issues`）：与 资源管理器 / Git / 子代理 / 终端 / 浏览器 等标签平级，打开即显示 `defaultProject` 的打开中 issue，**卡片式列表**（标题 / #iid / 指派人 / 标签 / 更新时间），点卡片展开标签内详情+讨论，可手动刷新 + 按设置间隔自动轮询（标签未激活时暂停轮询）。
 - **标签颜色同步 GitLab**：issue 请求带 `with_labels_details=true`，宿主把每个标签的 `color`/`text_color`（GitLab 服务器设定的背景色 + 对比文字色）一并脱敏下发，客户端标签 chip 直接用这套配色渲染——标签在侧边栏与 GitLab web 端颜色一致。
-- **从 issue 一键创建开发会话（▶ 播放三角按钮）**：每张卡片右上角的**播放三角（▶）**会**自动检查当前会话工作目录**——有工作目录就新建一个开发会话（继承该目录）并把「实现该 issue」的任务自动发给 agent（立刻开干）；没有工作目录则不自动启动，只给出可复制的任务提示词。任务提示词让 agent 用 `gitlab_view_issue` / `gitlab_list_notes` 读完整上下文，先把开发计划评论到 issue，再把用户回复加载进执行流；若当前目录不是对应仓库会先 `git clone`。纯客户端实现，无需重启。
+- **从 issue 一键创建开发会话（▶ 播放三角按钮）**：每张卡片底部有**播放三角（▶）**——点击后自动把「处理该 issue」的任务发给新开发会话（agent 先调研匹配度→制定 plan→更新标签→等你确认后才实现）。**工作区分组**：新会话用目标文件夹的 `workspaceId` 创建（不是裸 cwd），保证落在该 issue 项目对应的工作区/分组里；目标文件夹取自设置页的「项目→本地文件夹映射」（`group/project` → 本地路径），未配置则回落到当前会话工作目录。无法确定工作目录时不自动启动，只给可复制提示词。
 - **开发会话实时进度（卡片底部）**：**开始（▶）/ 停止（■）/ 打开（▶）按钮与统计信息统一放在卡片底部**——运行/已结束 圆点 + **token 消耗**（⬆输入 / ⬇输出 / Σ合计）+ **token 速度**（tok/s）。配色区分：开发中=绿点、已结束=灰点、停止=红、开始/打开=品牌橙。token 数据由宿主读该会话的事件日志（`assistant/message` 的 `usage`）聚合而来，经 `/session/stats` 代理返回（token 不出服务端）。
 - **点击 issue = 标签内详情 + 讨论（不跳 web）**：点条目直接在标签内展开 issue 内容（标题/状态/标签/指派/里程碑 + 描述）与完整讨论消息流，底部评论框可直接发评论（支持 Markdown，⌘/Ctrl+Enter 发送）。AI 在开发会话里用 `gitlab_create_note` 评论，详情刷新即见；你发的评论以配置 token 所属账号发布。描述/评论由客户端内置轻量 Markdown 渲染（先转义、无 XSS；GitLab 的 `render_html` 在该实例不生效）。
 - **双身份（区分谁发评论）**：可选「AI 专属 token」——给 DeepSeek Harness 用的 Service Account 配一个 PAT（scope 至少 `api`）填到设置页「AI 专属 token」，之后 agent 工具（含评论）一律以该 AI 身份发布、你在侧边栏的评论以你自己的账号发布，讨论里作者天然区分。未配置则 agent 回落用主 token（行为不变）。

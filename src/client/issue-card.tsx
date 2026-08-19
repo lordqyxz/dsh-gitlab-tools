@@ -93,7 +93,7 @@ export function IssueCard({ issue, project, active, onOpen, onDevSession, isRunn
               title="停止开发会话"
               aria-label="停止开发会话"
               onClick={() => onStopSession(session.sessionId)}
-              style={{ ...rowDevBtnStyle, color: C.err }}
+              style={{ ...rowDevBtnStyle, background: C.err, borderColor: C.err, color: "#fff" }}
             >
               <StopMark size={13} />
             </button>
@@ -114,7 +114,7 @@ export function IssueCard({ issue, project, active, onOpen, onDevSession, isRunn
             title={`创建开发会话（实现 issue #${issue.iid}）`}
             aria-label="创建开发会话"
             onClick={() => onDevSession(issue)}
-            style={{ ...rowDevBtnStyle, color: C.brand, opacity: hover ? 1 : 0.7 }}
+            style={{ ...rowDevBtnStyle, background: C.brand, borderColor: C.brand, color: "#fff" }}
           >
             <DevSessionMark size={13} />
           </button>
@@ -145,11 +145,7 @@ export function IssueCard({ issue, project, active, onOpen, onDevSession, isRunn
               <span style={{ whiteSpace: "nowrap", color: C.brand }}>~{stats.tokensPerSec.toFixed(1)} tok/s</span>
             ) : null}
           </div>
-        ) : (
-          <span style={{ fontSize: "10.5px", color: C.caption, flex: "1", minWidth: "0" }}>
-            点击 ▶ 创建开发会话
-          </span>
-        )}
+        ) : null}
       </div>
     </div>
   );

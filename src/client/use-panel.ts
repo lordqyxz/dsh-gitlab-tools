@@ -5,10 +5,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { refreshSignal } from "./state";
-import type { IssuesResp, PanelState, SettingsResp } from "./types";
+import type { IssuesResp, PanelState, ProjectDir, SettingsResp } from "./types";
 
 export function usePanel(active = true) {
-  const [settings, setSettings] = useState<{ defaultProject: string; refreshMs: number } | null>(null);
+  const [settings, setSettings] = useState<{ defaultProject: string; refreshMs: number; projectDirs: ProjectDir[] } | null>(null);
   const [state, setState] = useState<PanelState>({ loading: true, data: null, error: null });
 
   const loadIssues = useCallback((project?: string) => {
@@ -34,8 +34,17 @@ export function usePanel(active = true) {
       .then((json: SettingsResp) => {
         if (!json || json.ok !== true) return;
         setSettings((prev) => {
-          const next = { defaultProject: json.defaultProject ?? "", refreshMs: json.refreshMs ?? 120000 };
-          if (prev && prev.defaultProject === next.defaultProject && prev.refreshMs === next.refreshMs) {
+          const next = {
+            defaultProject: json.defaultProject ?? "",
+            refreshMs: json.refreshMs ?? 120000,
+            projectDirs: json.projectDirs ?? [],
+          };
+          if (
+            prev &&
+            prev.defaultProject === next.defaultProject &&
+            prev.refreshMs === next.refreshMs &&
+            JSON.stringify(prev.projectDirs) === JSON.stringify(next.projectDirs)
+          ) {
             return prev; // same reference → React bails out, no re-render loop
           }
           return next;
