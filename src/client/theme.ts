@@ -69,15 +69,19 @@ export const metaStyle: CSSProperties = {
   color: C.label3,
 };
 
-export const chipStyle: CSSProperties = {
-  padding: "0 5px",
-  borderRadius: "4px",
-  background: C.layer2,
-  color: C.label2,
-  fontSize: "10px",
-  lineHeight: "15px",
-  whiteSpace: "nowrap",
-};
+/** Label chip using GitLab's own label colors (bg + contrasting text). */
+export function labelChipStyle(l: { color?: string; text_color?: string }): CSSProperties {
+  const hex = (v?: string) => (v && /^#[0-9a-fA-F]{3,8}$/.test(v) ? v : undefined);
+  return {
+    padding: "0 5px",
+    borderRadius: "4px",
+    background: hex(l.color) ?? C.layer2,
+    color: hex(l.text_color) ?? C.label2,
+    fontSize: "10px",
+    lineHeight: "15px",
+    whiteSpace: "nowrap",
+  };
+}
 
 export const hintStyle: CSSProperties = {
   padding: "12px",

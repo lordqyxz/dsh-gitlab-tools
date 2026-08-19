@@ -2,14 +2,13 @@
 // markdown description, the conversation as message rows, and a comment box.
 
 import { useEffect, useState } from "react";
-import { useIssueDetail } from "./hooks";
-import { ensureMarkdownCss, renderMarkdown, renderSystemNote } from "./markdown";
+import { useIssueDetail } from "./use-issue-detail";
+import { ensureMarkdownCss, renderMarkdown } from "./markdown";
 import type { MdLinks } from "./markdown";
-import { fmtRelative } from "./format";
+import { NoteRow } from "./note-row";
 import {
   C,
-  avatarStyle,
-  chipStyle,
+  labelChipStyle,
   hintStyle,
   iconBtnStyle,
   inputStyle,
@@ -17,31 +16,6 @@ import {
   primaryBtnStyle,
   rootPanelStyle,
 } from "./theme";
-import type { Note } from "./types";
-
-/** One discussion note, styled as a conversation message. */
-function NoteRow({ note, links }: { note: Note; links?: MdLinks }) {
-  const author = note.author?.username ?? (note.system ? "系统" : "匿名");
-  const initial = (author[0] || "?").toUpperCase();
-  const html = note.system ? renderSystemNote(note.body, links) : renderMarkdown(note.body, links);
-  return (
-    <div style={{ display: "flex", gap: "8px", padding: "6px 0" }}>
-      <div style={avatarStyle}>{initial}</div>
-      <div style={{ flex: "1", minWidth: "0" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: "6px" }}>
-          <span style={{ fontSize: "11.5px", fontWeight: 600, color: C.label1 }}>{author}</span>
-          {note.system ? <span style={{ fontSize: "10px", color: C.brand }}>系统</span> : null}
-          <span style={{ fontSize: "10px", color: C.caption }}>{fmtRelative(note.created_at)}</span>
-        </div>
-        <div
-          className="gt-md"
-          style={{ marginTop: "2px" }}
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      </div>
-    </div>
-  );
-}
 
 /** Inline detail + discussion for one issue (no web jump). */
 export function IssueDetailView({ project, iid, onBack }: {
@@ -94,7 +68,7 @@ export function IssueDetailView({ project, iid, onBack }: {
                   #{issue.iid} · {issue.state}
                 </span>
                 {issue.labels.slice(0, 5).map((l) => (
-                  <span key={l} style={chipStyle}>{l}</span>
+                  <span key={l.name} style={labelChipStyle(l)}>{l.name}</span>
                 ))}
                 <span style={{ color: C.caption, whiteSpace: "nowrap" }}>作者 @{issue.author?.username ?? "?"}</span>
                 <span style={{ color: C.caption, whiteSpace: "nowrap" }}>

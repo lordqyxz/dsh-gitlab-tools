@@ -6,10 +6,15 @@
 //      Each issue row can spawn a dev session that implements it.
 //   2. settings.section       → a "GitLab Issues" settings page.
 //
-// The implementation is split into modules under src/client/:
-//   types.ts / format.ts / state.ts / theme.ts / markdown.ts / hooks.ts /
-//   devsession.ts / icons.tsx / issue-list.tsx / issue-detail.tsx / settings.tsx /
-//   tab.tsx  — this file only wires the plugin entry + tab registration.
+// The implementation is split into small single-responsibility modules under
+// src/client/ (one file per concern — see AGENTS.md "客户端模块拆分原则"):
+//   data hooks: use-panel.ts / use-issue-detail.ts / use-session-stats.ts
+//   surfaces:   tab.tsx (root) / issue-list.tsx (container) / issue-card.tsx
+//               / issue-detail.tsx / note-row.tsx / dev-notice.tsx / settings.tsx
+//               / token-fields.tsx
+//   helpers:    types.ts / format.ts / state.ts / theme.ts / markdown.ts
+//               / sanitize-html.ts / icons.tsx / devsession.ts / session-store.ts
+// This file only wires the plugin entry + tab registration.
 //
 // Built to lib/client.js by scripts/build.mjs (esbuild); platform modules (react,
 // react/jsx-runtime) resolve from the loader module table and are never inlined.

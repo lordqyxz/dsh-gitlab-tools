@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { IssueMark } from "./icons";
 import { refreshSignal } from "./state";
+import { TokenField } from "./token-fields";
 import { C, ghostBtnStyle, inputStyle } from "./theme";
 import type { SettingsResp } from "./types";
 
@@ -175,50 +176,32 @@ export function SettingsCard() {
         />
       </label>
 
-      <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
-        <span>访问令牌（Personal Access Token；只写不回显）</span>
-        <input
-          type="password"
-          autoComplete="new-password"
-          spellCheck={false}
-          placeholder={status.tokenConfigured ? "已设置（输入新值覆盖；留空不变）" : "未设置（输入 token）"}
-          value={cfg.token}
-          onChange={(e) => setCfg((prev) => ({ ...prev, token: e.target.value, clearToken: false }))}
-          style={inputStyle}
-        />
-        <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
-          <input
-            type="checkbox"
-            checked={cfg.clearToken}
-            onChange={(e) => setCfg((prev) => ({ ...prev, clearToken: e.target.checked }))}
-          />
-          <span>清除已保存的 token（回落 profile patch config）</span>
-        </label>
-      </label>
+      <TokenField
+        title="访问令牌（Personal Access Token；只写不回显）"
+        value={cfg.token}
+        configured={status.tokenConfigured}
+        placeholder={status.tokenConfigured ? "已设置（输入新值覆盖；留空不变）" : "未设置（输入 token）"}
+        clear={cfg.clearToken}
+        clearLabel="清除已保存的 token（回落 profile patch config）"
+        onChange={(v) => setCfg((prev) => ({ ...prev, token: v }))}
+        onClearChange={(c) => setCfg((prev) => ({ ...prev, clearToken: c }))}
+      />
 
-      <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
-        <span>
-          AI 专属 token（DeepSeek Harness 身份，可选）—— agent 工具（含 gitlab_create_note）用它发布，
-          与你的身份区分；需使用为 AI 建的 Service Account 的 PAT（scope 至少 api）
-        </span>
-        <input
-          type="password"
-          autoComplete="new-password"
-          spellCheck={false}
-          placeholder={status.aiTokenConfigured ? "已设置（输入新值覆盖；留空不变）" : "未设置（输入 Service Account 的 PAT）"}
-          value={cfg.aiToken}
-          onChange={(e) => setCfg((prev) => ({ ...prev, aiToken: e.target.value, clearAiToken: false }))}
-          style={inputStyle}
-        />
-        <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
-          <input
-            type="checkbox"
-            checked={cfg.clearAiToken}
-            onChange={(e) => setCfg((prev) => ({ ...prev, clearAiToken: e.target.checked }))}
-          />
-          <span>清除 AI 专属 token（回落 profile patch config）</span>
-        </label>
-      </label>
+      <TokenField
+        title={
+          <>
+            AI 专属 token（DeepSeek Harness 身份，可选）—— agent 工具（含 gitlab_create_note）用它发布，
+            与你的身份区分；需使用为 AI 建的 Service Account 的 PAT（scope 至少 api）
+          </>
+        }
+        value={cfg.aiToken}
+        configured={status.aiTokenConfigured}
+        placeholder={status.aiTokenConfigured ? "已设置（输入新值覆盖；留空不变）" : "未设置（输入 Service Account 的 PAT）"}
+        clear={cfg.clearAiToken}
+        clearLabel="清除 AI 专属 token（回落 profile patch config）"
+        onChange={(v) => setCfg((prev) => ({ ...prev, aiToken: v }))}
+        onClearChange={(c) => setCfg((prev) => ({ ...prev, clearAiToken: c }))}
+      />
 
       <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
         <span>默认项目（path_with_namespace，如 group/project；留空则不展示）</span>

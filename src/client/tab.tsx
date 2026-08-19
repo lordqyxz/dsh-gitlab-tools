@@ -2,17 +2,16 @@
 // subagent / terminal). Renders the issue list, a create-dev-session notice, and
 // switches to the inline detail view when a row is opened.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createDevSession } from "./devsession";
-import { usePanel } from "./hooks";
+import { usePanel } from "./use-panel";
 import { IssueMark } from "./icons";
 import { fmtRelative } from "./format";
-import { C, headerStyle, iconBtnStyle, miniBtnStyle, noticeStyle, rootPanelStyle } from "./theme";
+import { C, headerStyle, iconBtnStyle, rootPanelStyle } from "./theme";
 import { IssueList } from "./issue-list";
 import { IssueDetailView } from "./issue-detail";
+import { DevNoticePanel } from "./dev-notice";
 import type { DevNotice, Issue } from "./types";
-
-const NOTICE_COLOR: Record<DevNotice["kind"], string> = { ok: C.ok, warn: C.warn, err: C.err };
 
 /** dsh-better-sidebar tab component (same level as explorer/git/subagent/terminal). */
 export function GitLabIssuesTab({ ctx, scope, visible }: {
@@ -24,8 +23,44 @@ export function GitLabIssuesTab({ ctx, scope, visible }: {
   const [notice, setNotice] = useState<DevNotice | null>(null);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<{ project: string; iid: number } | null>(null);
+  const [runningById, setRunningById] = useState<Record<string, boolean>>({});
   const project = state.data?.ok ? state.data.project : settings?.defaultProject;
   const count = state.data?.ok ? (state.data.issues ?? []).length : 0;
+
+  // Mirror the sessions list feed → a sessionId→running map (live agent status).
+  useEffect(() => {
+    const sessions = ctx?.get?.("sessions") as
+      | { list?: { getSnapshot?: () => unknown; subscribe?: (fn: () => void) => () => void } }
+      | undefined;
+    const feed = sessions?.list;
+    if (!feed || typeof feed.subscribe !== "function" || typeof feed.getSnapshot !== "function") return;
+    const update = () => {
+      const snap = feed.getSnapshot() as { byId?: Record<string, { running?: boolean }> } | null | undefined;
+      const next: Record<string, boolean> = {};
+      for (const [id, s] of Object.entries(snap?.byId ?? {})) {
+        if (s && s.running === true) next[id] = true;
+      }
+      setRunningById(next);
+    };
+    update();
+    return feed.subscribe(update);
+  }, [ctx]);
+
+  const isRunning = useCallback((sessionId: string) => runningById[sessionId] === true, [runningById]);
+
+  const onOpenSession = useCallback((sessionId: string) => {
+    ctx?.get?.("sessions")?.open?.(sessionId);
+  }, [ctx]);
+
+  const onStopSession = useCallback(async (sessionId: string) => {
+    try {
+      const res = await fetch(`/gitlab-tools/session/stop?sessionId=${encodeURIComponent(sessionId)}`, { method: "POST" });
+      const json = await res.json();
+      setNotice({ kind: json?.stopped ? "ok" : "warn", text: json?.message || (json?.stopped ? "已停止开发会话" : "停止失败") });
+    } catch (e) {
+      setNotice({ kind: "err", text: "停止失败：" + String((e && (e as Error).message) || e) });
+    }
+  }, []);
 
   const onDevSession = useCallback(
     async (issue: Issue) => {
@@ -72,64 +107,19 @@ export function GitLabIssuesTab({ ctx, scope, visible }: {
       </div>
 
       {notice ? (
-        <div style={noticeStyle}>
-          <div style={{ display: "flex", alignItems: "flex-start", gap: "6px" }}>
-            <span
-              style={{
-                flex: "1",
-                minWidth: "0",
-                fontSize: "11px",
-                lineHeight: "16px",
-                color: NOTICE_COLOR[notice.kind],
-              }}
-            >
-              {notice.text}
-            </span>
-            <button type="button" title="关闭" onClick={() => setNotice(null)} style={iconBtnStyle}>✕</button>
-          </div>
-          {notice.prompt ? (
-            <div
-              style={{
-                marginTop: "6px",
-                fontSize: "11px",
-                lineHeight: "15px",
-                color: C.label3,
-                background: C.input,
-                borderRadius: "6px",
-                padding: "6px 8px",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-word",
-                maxHeight: "120px",
-                overflowY: "auto",
-              }}
-            >
-              {notice.prompt}
-            </div>
-          ) : null}
-          {notice.prompt || notice.sessionId ? (
-            <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
-              {notice.prompt ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (notice.prompt) navigator.clipboard?.writeText(notice.prompt).catch(() => {});
-                  }}
-                  style={miniBtnStyle}
-                >
-                  复制提示词
-                </button>
-              ) : null}
-              {notice.sessionId ? (
-                <button type="button" onClick={openNoticeSession} style={miniBtnStyle}>
-                  打开会话
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
+        <DevNoticePanel notice={notice} onClose={() => setNotice(null)} onOpenSession={openNoticeSession} />
       ) : null}
 
-      <IssueList state={state} onOpen={onOpen} onDevSession={onDevSession} />
+      <IssueList
+        state={state}
+        project={project}
+        active={Boolean(visible)}
+        onOpen={onOpen}
+        onDevSession={onDevSession}
+        isRunning={isRunning}
+        onOpenSession={onOpenSession}
+        onStopSession={onStopSession}
+      />
 
       <div
         style={{

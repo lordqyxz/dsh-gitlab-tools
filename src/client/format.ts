@@ -14,3 +14,11 @@ export function fmtRelative(iso?: string | number): string {
   if (d < 30) return `${d} 天前`;
   return new Date(iso).toLocaleDateString();
 }
+
+/** Compact count formatting: 1234 → "1.2k", 2_500_000 → "2.5m". */
+export function fmtCount(n?: number): string {
+  if (n === undefined || n === null || !Number.isFinite(n)) return "0";
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}m`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`;
+  return String(Math.round(n));
+}

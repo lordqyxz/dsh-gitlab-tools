@@ -2,6 +2,15 @@
 // Every byte of GitLab data arrives through the host proxy routes (/gitlab-tools/*)
 // so the token never leaves the server.
 
+/** A GitLab label with its server-assigned colors (when label details are fetched). */
+export type Label = {
+  name: string;
+  /** Background color, e.g. "#428bca". */
+  color?: string;
+  /** Contrasting text color chosen by GitLab, e.g. "#ffffff". */
+  text_color?: string;
+};
+
 /** Issue list row (from GET /gitlab-tools/issues). */
 export type Issue = {
   iid: number;
@@ -10,7 +19,7 @@ export type Issue = {
   web_url: string;
   created_at: string;
   updated_at: string;
-  labels: string[];
+  labels: Label[];
   assignees: { username: string; name?: string }[];
   author: { username: string; name?: string } | null;
   milestone: { title: string } | null;
@@ -69,4 +78,23 @@ export type DevNotice = {
   text: string;
   prompt?: string;
   sessionId?: string;
+};
+
+/** Live dev-session runtime stats (from GET /gitlab-tools/session/stats). */
+export type SessionStats = {
+  ok: boolean;
+  sessionId: string;
+  exists: boolean;
+  running: boolean;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+  tokensPerSec: number | null;
+  firstActiveAt: number | null;
+  lastActiveAt: number | null;
+  samples: number;
+  updatedAt: number;
 };

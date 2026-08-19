@@ -101,42 +101,16 @@ export function renderMarkdown(md: string, links?: MdLinks): string {
 }
 
 // ── GitLab system notes ─────────────────────────────────────────────────────
-// System notes come back as already-HTML (e.g. title-change idiff markup).
-// We keep only a tiny allow-list of safe tags/attributes and drop everything
-// else, so there is no script/on*/style/javascript: injection surface.
+// HTML bodies are sanitized through the allow-list in sanitize-html.ts;
+// plain-text bodies (e.g. "assigned to @x", "added #42 as parent item") run
+// through the markdown renderer so @/#/! stay clickable.
 
-const SAFE_TAGS = new Set([
-  "p", "br", "code", "span", "strong", "em", "del", "b", "i", "a",
-  "ul", "ol", "li", "pre", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6", "hr",
-]);
-
-function sanitizeSystemHtml(html: string): string {
-  return html.replace(/<(\/?)([a-zA-Z0-9]+)((?:\s+[a-zA-Z0-9-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*(\/?)>/g, (m, close, tag, attrs, selfclose) => {
-    if (!SAFE_TAGS.has(tag.toLowerCase())) return "";
-    let keep = "";
-    const attrRe = /([a-zA-Z0-9-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
-    let am: RegExpExecArray | null;
-    while ((am = attrRe.exec(attrs))) {
-      const name = am[1].toLowerCase();
-      const val = (am[2] ?? am[3] ?? am[4] ?? "").replace(/"/g, "");
-      if (name === "class") keep += ` class="${val}"`;
-      else if (name === "href") {
-        // Allow-list schemes only: http(s)/mailto + relative (#, /). A block-list
-        // is bypassable via entity encoding (e.g. &#106;avascript:), so reject
-        // anything that isn't on the safe list outright.
-        const v = val.trim().toLowerCase();
-        if (/^(https?:|mailto:|#|\/)/.test(v)) keep += ` href="${val}"`;
-      } else if (name === "title") keep += ` title="${val}"`;
-    }
-    return `<${close}${tag}${keep}${selfclose}>`;
-  });
-}
+import { sanitizeSystemHtml } from "./sanitize-html";
 
 /**
  * Render a GitLab system-note body. HTML bodies (title-change idiff, etc.) are
- * sanitized through the allow-list; plain-text bodies (e.g. "assigned to @x",
- * "added #42 as parent item") run through the markdown renderer so @/#/! stay
- * clickable.
+ * sanitized through the allow-list; plain-text bodies run through the markdown
+ * renderer so @/#/! references stay clickable.
  */
 export function renderSystemNote(body: string, links?: MdLinks): string {
   if (/<[a-zA-Z][^>]*>/.test(body)) {

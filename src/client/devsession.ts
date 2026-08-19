@@ -3,13 +3,14 @@
 // implements the issue. No host changes needed — pure client via ctx.get("sessions").
 
 import type { DevNotice, Issue } from "./types";
+import { registerIssueSession } from "./session-store";
 
 /** Build the task prompt handed to the new dev session (auto-started when suitable). */
 export function buildPrompt(issue: Issue, project?: string, cwd?: string): string {
-  const labels = issue.labels.length ? issue.labels.join(", ") : "无";
+  const labels = issue.labels.length ? issue.labels.map((l) => l.name).join(", ") : "无";
   const assignee = issue.assignees.length ? `@${issue.assignees[0].username}` : "未指派";
   return [
-    `请实现 GitLab issue #${issue.iid}：${issue.title || "(无标题)"}`,
+    `请处理 GitLab issue #${issue.iid}：${issue.title || "(无标题)"}`,
     "",
     `- 项目：${project || "（未知）"}`,
     `- 状态：${issue.state} · 标签：${labels} · 指派人：${assignee}`,
@@ -17,14 +18,17 @@ export function buildPrompt(issue: Issue, project?: string, cwd?: string): strin
     cwd ? `- 工作目录：${cwd}` : "- 工作目录：（未设置）",
     "",
     "",
-    "## 开发流程（务必照做）",
-    "1. 先用 gitlab_view_issue 读取 #${issue.iid} 的完整描述，再用 gitlab_list_notes 读取该 issue 的整条讨论（含用户的方案、疑问、回复），以此建立完整上下文。",
-    "2. 在动手前，先用 gitlab_create_note 把你的【开发计划】发到 issue #${issue.iid} 的评论里（含：对需求的理解、方案选择、疑问点、实施步骤、工作量估计）。有新的观点/疑问/方案变化时，也通过 gitlab_create_note 持续同步到 issue。",
-    cwd
-      ? `若当前工作目录不是 ${project || "该项目"} 的本地仓库，先 git clone 到合适位置再动手。`
-      : "当前没有工作目录：先确定/克隆该项目到合适的工作目录，再开始实现。",
-    "3. 实现过程中：若用户在 issue 评论或对话里回复你（答复疑问、给新方案、@ 你），用 gitlab_list_notes 及时重新读取讨论，把这些回复正确加载进执行流程并继续。不要忽略评论里的任何用户反馈。",
-    "4. 实现完成后，用 gitlab_create_note 在 issue 上补充实现说明/结论（必要时提交 MR），并说明如何验证。",
+    "## 开发规程（务必按此执行：先规划、先确认，再动手）",
+    "0. 【只读调研·不写代码】先用 gitlab_view_issue 读取 #${issue.iid} 的完整描述，用 gitlab_list_notes 读取整条讨论（含用户的方案、疑问、回复）；" +
+      (cwd
+        ? `clone/定位仓库后，评估【该 issue 与当前代码的匹配程度】：需求能落在哪些现有模块/代码路径上、改动范围大概多大。`
+        : `评估该 issue 与代码的匹配程度：先确定/克隆该项目到合适工作目录。`) +
+      " 这一步只调研，绝不开始写代码。",
+    "1. 【制定 plan】把【开发计划】用 gitlab_create_note 发到 issue #${issue.iid} 的评论里——含：对需求的理解、方案选择、issue 与代码匹配度评估、疑问点、实施步骤、工作量估计。",
+    "2. 【更新标签】用 gitlab_api 更新该 issue 的标签以反映当前状态（例如标为「规划中/待确认」或你按需新建的状态标签），但先不要把「进行中」标得太早。",
+    "3. 【触发对话·等待确认】把 plan 同步到 issue 评论，必要时在对话里向用户说明并明确询问确认。**等待用户确认后再开始实际开发。**",
+    "4. 【确认后实现】用户确认后，严格按 plan 实现；期间若用户在 issue 评论或对话里回复（答复疑问、给新方案、@ 你），用 gitlab_list_notes 及时重读讨论并把反馈正确加载进执行流，不要忽略。",
+    "5. 【收尾】实现完成后，用 gitlab_create_note 在 issue 上补充实现说明/结论（必要时提交 MR），说明如何验证，并把标签更新为已完成/进行中对应的状态。",
     "",
     "## 对话交互",
     "用户在对话里 @ 你或直接对你说话时，都要正确响应其请求；若该请求属于某个 issue，先 gitlab_list_notes 读讨论再回应。",
@@ -66,6 +70,8 @@ export async function createDevSession(
     if (typeof sessionId !== "string" || !sessionId) {
       return { kind: "err", text: "创建会话失败（未返回 sessionId）" };
     }
+    // Remember the issue→session link so the card can show live progress/tokens.
+    registerIssueSession(project, issue.iid, sessionId);
     const session = sessions.binding?.(sessionId)?.session;
     if (session && typeof session.prompt === "function") {
       await session.prompt([{ type: "text", text: prompt }], "queue");
