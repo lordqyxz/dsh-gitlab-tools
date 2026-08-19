@@ -488,9 +488,10 @@ function SettingsCard() {
       </div>
 
       <div style={{ fontSize: "11px", lineHeight: "16px", color: C.label3 }}>
-        服务器地址（host）与访问令牌（token）都可在此配置，保存后立即生效（无需重启）。
-        token 为「只写」：不回显明文，只显示是否已设置；留空且未勾选「清除」则保持不变。
-        未设置/被清除时回落 profile patch config 里的值。侧边栏的 GitLab Issues 标签会自动刷新。
+        服务器地址（host）存 settings；访问令牌（token）存 DSH 官方凭据存储
+        （~/.dsh/.credentials.yaml，600 权限），只写不回显明文。留空且未勾选
+        「清除」则保持不变；未设置/被清除时回落 profile patch config 里的值。
+        保存后立即生效（无需重启）。
       </div>
 
       <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>

@@ -23,9 +23,16 @@ assert(typeof mod.apply === 'function' && mod.inject.includes('tools'), 'host ap
 function makeCtx(config) {
   const routes = []
   const userLayer = {}
+  const creds = new Map()
   const ctx = {
     logger: { info() {}, warn() {} },
     tools: { register() {} },
+    credentials: {
+      resolve: async (ref) => { const v = creds.get(ref); return v === undefined ? undefined : { value: v, source: 'mock' } },
+      describe: async (ref) => ({ configured: creds.has(ref), source: creds.has(ref) ? 'mock' : undefined, writable: true }),
+      set: async (ref, value) => { creds.set(ref, value) },
+      unset: async (ref) => { creds.delete(ref) },
+    },
     settings: {
       register(ns, _schema, { base }) {
         const current = { ...base }
@@ -39,7 +46,7 @@ function makeCtx(config) {
     webServer: { register(route) { routes.push(route); return () => {} } },
     effect(fn) { const ret = fn(); return ret },
   }
-  return { ctx, routes, userLayer }
+  return { ctx, routes, userLayer, creds }
 }
 
 function makeRes() {
@@ -66,7 +73,7 @@ async function call(route, method, path, body) {
 }
 
 // configured instance
-const { ctx, routes } = makeCtx()
+const { ctx, routes, userLayer, creds } = makeCtx()
 await mod.apply(ctx, { host: 'https://gl.example.com', token: 'glpat-x', defaultProject: '', perPage: 20, timeoutMs: 60000 })
 const route = routes.find((r) => r.kind === 'prefix' && r.path === '/gitlab-tools')
 assert(Boolean(route), 'registers /gitlab-tools prefix route')
@@ -88,6 +95,7 @@ assert(r.status === 200 && r.json.tokenConfigured === true && !('token' in r.jso
 
 r = await call(route, 'POST', '/gitlab-tools/settings', { token: 'glpat-abcdef123456' })
 assert(r.status === 200 && r.json.ok === true, 'POST /settings → set token')
+assert(creds.get('gitlabToolsToken') === 'glpat-abcdef123456' && !('token' in userLayer), 'token 存进 credentials（.credentials.yaml），不进 settings')
 r = await call(route, 'GET', '/gitlab-tools/settings')
 assert(r.status === 200 && r.json.tokenConfigured === true && !('token' in r.json), 'GET /settings → 新 token 已生效且不回显')
 
@@ -96,8 +104,9 @@ assert(r.status === 400 && r.json.code === 'config', 'POST /settings → rejects
 
 r = await call(route, 'POST', '/gitlab-tools/settings', { token: '' })
 assert(r.status === 200 && r.json.ok === true, 'POST /settings → clear token')
+assert(!creds.has('gitlabToolsToken'), '清除 token → 从 credentials 移除')
 r = await call(route, 'GET', '/gitlab-tools/settings')
-assert(r.status === 200 && r.json.tokenConfigured === true, 'GET /settings → 清除设置 token 后回落 config token，仍 configured')
+assert(r.status === 200 && r.json.tokenConfigured === true, 'GET /settings → 清除凭据 token 后回落 config token，仍 configured')
 
 r = await call(route, 'POST', '/gitlab-tools/settings', { defaultProject: 'group/proj', refreshMs: 300000 })
 assert(r.status === 200 && r.json.ok === true && r.json.defaultProject === 'group/proj', 'POST /settings → persists defaultProject')
