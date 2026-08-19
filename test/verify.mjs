@@ -83,6 +83,22 @@ assert(r.status === 200 && r.json.ok === true && r.json.host === 'https://new.ex
 r = await call(route, 'POST', '/gitlab-tools/settings', { host: 12345 })
 assert(r.status === 400 && r.json.code === 'config', 'POST /settings → rejects non-string host')
 
+r = await call(route, 'GET', '/gitlab-tools/settings')
+assert(r.status === 200 && r.json.tokenConfigured === true && !('token' in r.json), 'GET /settings → tokenConfigured=true, token 明文不回显')
+
+r = await call(route, 'POST', '/gitlab-tools/settings', { token: 'glpat-abcdef123456' })
+assert(r.status === 200 && r.json.ok === true, 'POST /settings → set token')
+r = await call(route, 'GET', '/gitlab-tools/settings')
+assert(r.status === 200 && r.json.tokenConfigured === true && !('token' in r.json), 'GET /settings → 新 token 已生效且不回显')
+
+r = await call(route, 'POST', '/gitlab-tools/settings', { token: 123 })
+assert(r.status === 400 && r.json.code === 'config', 'POST /settings → rejects non-string token')
+
+r = await call(route, 'POST', '/gitlab-tools/settings', { token: '' })
+assert(r.status === 200 && r.json.ok === true, 'POST /settings → clear token')
+r = await call(route, 'GET', '/gitlab-tools/settings')
+assert(r.status === 200 && r.json.tokenConfigured === true, 'GET /settings → 清除设置 token 后回落 config token，仍 configured')
+
 r = await call(route, 'POST', '/gitlab-tools/settings', { defaultProject: 'group/proj', refreshMs: 300000 })
 assert(r.status === 200 && r.json.ok === true && r.json.defaultProject === 'group/proj', 'POST /settings → persists defaultProject')
 

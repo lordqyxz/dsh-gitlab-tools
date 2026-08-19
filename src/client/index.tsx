@@ -38,6 +38,7 @@ type SettingsResp = {
   host?: string;
   refreshMs?: number;
   configured?: boolean;
+  tokenConfigured?: boolean;
   code?: string;
   message?: string;
 };
@@ -391,12 +392,13 @@ function GitLabIssuesTab({ visible }: { visible: boolean }) {
 // ---- settings page ----
 
 function SettingsCard() {
-  const [cfg, setCfg] = useState({ defaultProject: "", host: "", refreshMs: 120000 });
+  const [cfg, setCfg] = useState({ defaultProject: "", host: "", token: "", clearToken: false, refreshMs: 120000 });
   const [status, setStatus] = useState({
     loading: true,
     saving: false,
     msg: null as string | null,
     configured: false,
+    tokenConfigured: false,
     test: null as string | null,
   });
 
@@ -416,6 +418,7 @@ function SettingsCard() {
             host: json.host ?? prev.host,
             refreshMs: json.refreshMs ?? prev.refreshMs,
           }));
+          setStatus((prev) => ({ ...prev, tokenConfigured: json.tokenConfigured === true }));
         }
       })
       .catch(() => {});
@@ -427,10 +430,21 @@ function SettingsCard() {
 
   const onSave = () => {
     setStatus((prev) => ({ ...prev, saving: true, msg: null }));
+    const payload: Record<string, string | number> = {
+      defaultProject: cfg.defaultProject.trim(),
+      host: cfg.host.trim(),
+      refreshMs: cfg.refreshMs,
+    };
+    if (cfg.clearToken) {
+      payload.token = ""; // 清除已保存 token，回落到 profile patch config
+    } else if (cfg.token.trim()) {
+      payload.token = cfg.token.trim(); // 覆盖为新 token
+    }
+    // 否则（空且未勾选清除）→ 不传 token，保持不变
     fetch("/gitlab-tools/settings", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ defaultProject: cfg.defaultProject.trim(), host: cfg.host.trim(), refreshMs: cfg.refreshMs }),
+      body: JSON.stringify(payload),
     })
       .then((r) => r.json())
       .then((json) => {
@@ -474,8 +488,9 @@ function SettingsCard() {
       </div>
 
       <div style={{ fontSize: "11px", lineHeight: "16px", color: C.label3 }}>
-        服务器地址（host）在此配置，保存后立即生效（无需重启）；token 仍在 profile patch 的
-        gitlab-tools config 里配置（不会下发到浏览器）。侧边栏的 GitLab Issues 标签会自动刷新。
+        服务器地址（host）与访问令牌（token）都可在此配置，保存后立即生效（无需重启）。
+        token 为「只写」：不回显明文，只显示是否已设置；留空且未勾选「清除」则保持不变。
+        未设置/被清除时回落 profile patch config 里的值。侧边栏的 GitLab Issues 标签会自动刷新。
       </div>
 
       <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
@@ -489,6 +504,27 @@ function SettingsCard() {
           onChange={(e) => setCfg((prev) => ({ ...prev, host: e.target.value }))}
           style={inputStyle}
         />
+      </label>
+
+      <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
+        <span>访问令牌（Personal Access Token；只写不回显）</span>
+        <input
+          type="password"
+          autoComplete="new-password"
+          spellCheck={false}
+          placeholder={status.tokenConfigured ? "已设置（输入新值覆盖；留空不变）" : "未设置（输入 token）"}
+          value={cfg.token}
+          onChange={(e) => setCfg((prev) => ({ ...prev, token: e.target.value, clearToken: false }))}
+          style={inputStyle}
+        />
+        <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
+          <input
+            type="checkbox"
+            checked={cfg.clearToken}
+            onChange={(e) => setCfg((prev) => ({ ...prev, clearToken: e.target.checked, token: e.target.checked ? prev.token : prev.token }))}
+          />
+          <span>清除已保存的 token（回落 profile patch config）</span>
+        </label>
       </label>
 
       <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
