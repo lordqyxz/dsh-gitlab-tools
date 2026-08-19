@@ -25,6 +25,9 @@ dsh-gitlab-tools (cordis 插件)
 ## GitLab Issues 侧边栏标签（浏览器半区）
 
 - **better-sidebar 标签**（`ctx.get('betterSidebar').registerTab`，id `gitlab-tools:issues`）：与 资源管理器 / Git / 子代理 / 终端 / 浏览器 等标签平级，打开即显示 `defaultProject` 的打开中 issue 列表（标题 / #iid / 指派人 / 标签 / 更新时间），点条目在新标签打开 GitLab，可手动刷新 + 按设置间隔自动轮询（标签未激活时暂停轮询）。
+- **从 issue 一键创建开发会话**：每行 issue 右侧的「创建开发会话」按钮会**自动检查当前会话工作目录**——有工作目录就新建一个开发会话（继承该目录）并把「实现该 issue」的任务自动发给 agent（立刻开干）；没有工作目录则不自动启动，只给出可复制的任务提示词。任务提示词让 agent 用 `gitlab_view_issue` 读完整描述，若当前目录不是对应仓库会先 `git clone`。纯客户端实现，无需重启。
+- **点击 issue = 标签内详情 + 讨论（不跳 web）**：点条目直接在标签内展开 issue 内容（标题/状态/标签/指派/里程碑 + 描述）与完整讨论消息流，底部评论框可直接发评论（支持 Markdown，⌘/Ctrl+Enter 发送）。AI 在开发会话里用 `gitlab_create_note` 评论，详情刷新即见；你发的评论以配置 token 所属账号发布。描述/评论由客户端内置轻量 Markdown 渲染（先转义、无 XSS；GitLab 的 `render_html` 在该实例不生效）。
+- **双身份（区分谁发评论）**：可选「AI 专属 token」——给 DeepSeek Harness 用的 Service Account 配一个 PAT（scope 至少 `api`）填到设置页「AI 专属 token」，之后 agent 工具（含评论）一律以该 AI 身份发布、你在侧边栏的评论以你自己的账号发布，讨论里作者天然区分。未配置则 agent 回落用主 token（行为不变）。
 - **设置页**（`settings.section` 槽位，设置 →「GitLab Issues」）：配置默认项目 `defaultProject` 与刷新间隔 `refreshMs`，带「测试连接」。
 - **主题**：配色只用 DSH 设计系统真实存在的 `--dsw-alias-*` token，随 `body[data-ds-dark-theme]` 自适应白天/夜间主题。
 - **安全**：浏览器只通过宿主 `/gitlab-tools/*` 代理路由拿数据，host/token **绝不进入浏览器**。
@@ -55,7 +58,8 @@ SDK 用 `PRIVATE-TOKEN` 头访问。缺 host/token 时工具会抛清晰报错�
 | `gitlab_list_issues` / `gitlab_view_issue` / `gitlab_create_issue` | issue 列表/详情/创建 |
 | `gitlab_list_mrs` / `gitlab_view_mr` / `gitlab_create_mr` / `gitlab_merge_mr` | MR 列表/详情/创建/合并 |
 | `gitlab_list_pipelines` / `gitlab_latest_pipeline` | CI/CD pipeline 列表/最新 |
-| `gitlab_create_note` | 给 issue 加评论 |
+| `gitlab_create_note` | 给 issue 加评论（开发计划/观点/疑问/方案同步用） |
+| `gitlab_list_notes` | 读取 issue 完整讨论（旧→新；加载用户评论里的回复进开发流程用） |
 | `gitlab_api` | **全量**：任意 REST v4 端点直通（覆盖 spec 全部 1145 个操作） |
 
 `project` 参数接受 `group/project` 路径或数字 id（省略时用 config 的 `defaultProject`）。

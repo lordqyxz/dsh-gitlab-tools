@@ -24,15 +24,21 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 8. **GitLab Issues 侧边栏标签（浏览器半区）**：客户端 `src/client/index.tsx` → `lib/client.js`（esbuild 构建，产物提交）。注册两个面：
    - `dsh-better-sidebar` 标签（`ctx.get('betterSidebar').registerTab`，id `gitlab-tools:issues`，`order:60`，与 explorer/git/terminal 等平级；better-sidebar 在 boot 图里先于本插件 apply，故 apply 时服务已可用，仍留 500ms×20 重试兜底）
    - `settings.section`（「GitLab Issues」设置页：defaultProject / refreshMs）
+   - **每行 issue 的「创建开发会话」按钮**（纯客户端）：`ctx.get('sessions')` → `create({cwd})`（继承当前会话工作目录）→ `binding(id).session.prompt(提示词, 'queue')` 自动把「实现该 issue」任务发给 agent → `open(id)` 跳转。**先自动检查**：当前会话有工作目录才自动开干；没有则只给提示词 + 复制按钮，不自动启动（符合"合适才开干"）。提示词让 agent 用 `gitlab_view_issue` 读完整描述、非对应仓库先 clone。无宿主改动、免重启。
+   - **点击 issue = 标签内详情+讨论**（不再跳 web）：列表点条目 → `IssueDetailView`（返回按钮回列表）。展示标题/状态/标签/指派/里程碑/描述（Markdown）+ 讨论消息流（头像+作者+相对时间，`NoteRow`，类对话消息结构）+ 底部评论框（POST 到 `/issue/notes`，⌘/Ctrl+Enter 发送）。**`render_html` 在该 GitLab 实例无效** → 客户端用内置 `renderMarkdown`（**先转义再变换**，`.gt-md` 样式一次性注入 document.head，无 XSS；只支持常见子集）。AI 评论沿用开发会话的 `gitlab_create_note`（详情刷新可见）。评论以配置 token 所属账号发布。
+   - **双身份（区分谁发评论）**：`aiToken`（凭据 REF `gitlabToolsAiToken`，设置页「AI 专属 token」字段）是 **DeepSeek Harness 专属 Service Account** 的 PAT（用户已在实例建好 `service_account_5c681ca62d63cc04fb90e812683750fa` id=42，admin=shiyz 建的；PAT 由用户自建）。**工具用 AI token、UI 路由用主 token**：`getClient()`=agent 工具（优先 aiToken，回落主 token），`getUIClient()`=浏览器路由（恒用主 token）——所以 agent 的 `gitlab_create_note` 以 SA 身份评论、你侧边栏评论以你身份发，讨论里作者天然区分。`makeClient(token)` 按 host|token 记忆化。aiToken 可选，未配置则回落主 token（行为不变）。
    数据一律走宿主代理路由（token 不出服务端），见下面「HTTP 路由」。配色只用 `design-platform.css` 里**真实存在**的 `--dsw-alias-*` token（bg-overlay / bg-layer-2 / interactive-bg-hover 等），随 `body[data-ds-dark-theme]` 自适应白天/夜间——曾误用不存在的 `bg-elevated`/`track-bg`（带深色 fallback）导致白天主题错色，已修。改客户端代码 → `node scripts/build.mjs` → `dev_reload_package gitlab-tools` → 刷新浏览器即可（免重启）。
 
 9. **HTTP 路由**（宿主 `lib/index.js` 里注册，`kind:'prefix' path:'/gitlab-tools'`）：
    - `GET  /gitlab-tools/status` → `{ ok, configured }`（不回显任何 secret）
-   - `GET  /gitlab-tools/settings` → UI 配置（defaultProject/refreshMs，来自 settings 命名空间 `gitlabTools` 的 `scope.get()`）
-   - `POST /gitlab-tools/settings` → 白名单键 `{ defaultProject, refreshMs }` 写用户层（`scope.update`）
+   - `GET  /gitlab-tools/settings` → UI 配置（defaultProject/refreshMs 来自 settings 命名空间；`tokenConfigured`/`aiTokenConfigured` 布尔位，不回显明文）
+   - `POST /gitlab-tools/settings` → 白名单键 `{ defaultProject, refreshMs }` 写用户层；`token`/`aiToken` 写凭据存储（空串=清除）
    - `GET  /gitlab-tools/issues?project=&state=&perPage=` → 经 SDK 代理，返回脱敏 issue 列表
+   - `GET  /gitlab-tools/issue?project=&iid=` → 详情（title/description/meta，`issueDetailBrief`）
+   - `GET  /gitlab-tools/issue/notes?project=&iid=` → 讨论列表（`noteBrief`；走 `client.raw`，notes 不在生成 SDK 里）
+   - `POST /gitlab-tools/issue/notes?project=&iid=` body `{body}` → 发评论（走 `client.raw`；以配置 token 所属账号发布）
    - `GET  /gitlab-tools/projects?search=&perPage=` → 设置页项目选择器用
-   host+token 留在静态 config（profile patch），**绝不下发浏览器**。
+   host+token 留在静态 config（profile patch），**绝不下发浏览器**。`iid` 参数必须显式存在且 >0（`Number(null)===0` 曾绕过校验）。
 
 10. **构建**：`node scripts/build.mjs`（esbuild，externals 表见脚本）产出 `lib/client.js`（即 `exports["./client"]`，`dsh-client-modules` 固定按此路径定位 bundle，与超级注入器 `dev_reload_package` 的 preflight 一致）。esbuild 是 devDependency，装完要 `pnpm approve-builds esbuild`（已在 package.json 用 `pnpm.onlyBuiltDependencies` 白名单）。改客户端代码 → 重新 build → 刷新页面即可（无需重启）；改宿主代码 → 重启或热重载。
 

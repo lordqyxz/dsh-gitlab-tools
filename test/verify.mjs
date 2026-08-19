@@ -108,11 +108,31 @@ assert(!creds.has('gitlabToolsToken'), '清除 token → 从 credentials 移除'
 r = await call(route, 'GET', '/gitlab-tools/settings')
 assert(r.status === 200 && r.json.tokenConfigured === true, 'GET /settings → 清除凭据 token 后回落 config token，仍 configured')
 
+// AI 专属 token（DeepSeek Harness 身份，可选用）
+r = await call(route, 'POST', '/gitlab-tools/settings', { aiToken: 'glpat-ai-bot-123456' })
+assert(r.status === 200 && r.json.ok === true, 'POST /settings → set aiToken')
+assert(creds.get('gitlabToolsAiToken') === 'glpat-ai-bot-123456' && !('aiToken' in userLayer), 'aiToken 存进 credentials，不进 settings')
+r = await call(route, 'GET', '/gitlab-tools/settings')
+assert(r.status === 200 && r.json.aiTokenConfigured === true && !('aiToken' in r.json), 'GET /settings → aiTokenConfigured=true，明文不回显')
+r = await call(route, 'POST', '/gitlab-tools/settings', { aiToken: 123 })
+assert(r.status === 400 && r.json.code === 'config', 'POST /settings → rejects non-string aiToken')
+r = await call(route, 'POST', '/gitlab-tools/settings', { aiToken: '' })
+assert(r.status === 200 && r.json.ok === true, 'POST /settings → clear aiToken')
+assert(!creds.has('gitlabToolsAiToken'), '清除 aiToken → 从 credentials 移除')
+
 r = await call(route, 'POST', '/gitlab-tools/settings', { defaultProject: 'group/proj', refreshMs: 300000 })
 assert(r.status === 200 && r.json.ok === true && r.json.defaultProject === 'group/proj', 'POST /settings → persists defaultProject')
 
 r = await call(route, 'POST', '/gitlab-tools/settings', { evil: 'x', refreshMs: 1 })
 assert(r.status === 400 && r.json.code === 'config', 'POST /settings → rejects out-of-range refreshMs')
+
+// new inline detail + discussion routes: parameter validation (no SDK hit)
+r = await call(route, 'GET', '/gitlab-tools/issue?project=p')
+assert(r.status === 200 && r.json.ok === false && r.json.code === 'params', 'GET /issue → missing iid rejected')
+r = await call(route, 'GET', '/gitlab-tools/issue/notes?project=p')
+assert(r.status === 200 && r.json.ok === false && r.json.code === 'params', 'GET /issue/notes → missing iid rejected')
+r = await call(route, 'POST', '/gitlab-tools/issue/notes?project=p&iid=1', { body: '   ' })
+assert(r.status === 400 && r.json.ok === false && r.json.code === 'params', 'POST /issue/notes → empty body rejected')
 
 r = await call(route, 'GET', '/gitlab-tools/nope')
 assert(r.status === 404, 'unknown route → 404')
@@ -125,6 +145,12 @@ r = await call(route2, 'GET', '/gitlab-tools/status')
 assert(r.status === 200 && r.json.configured === false, 'unconfigured → GET /status configured=false')
 r = await call(route2, 'GET', '/gitlab-tools/issues?project=group/proj')
 assert(r.status === 200 && r.json.ok === false && r.json.code === 'not_configured', 'unconfigured → /issues not_configured')
+r = await call(route2, 'GET', '/gitlab-tools/issue?project=p&iid=1')
+assert(r.status === 200 && r.json.ok === false && r.json.code === 'not_configured', 'unconfigured → /issue not_configured')
+r = await call(route2, 'GET', '/gitlab-tools/issue/notes?project=p&iid=1')
+assert(r.status === 200 && r.json.ok === false && r.json.code === 'not_configured', 'unconfigured → /issue/notes not_configured')
+r = await call(route2, 'POST', '/gitlab-tools/issue/notes?project=p&iid=1', { body: 'hi' })
+assert(r.status === 200 && r.json.ok === false && r.json.code === 'not_configured', 'unconfigured → POST /issue/notes not_configured')
 
 // ── 3. browser bundle structure ──────────────────────────────────────────────
 globalThis.window = { __ModuleLoader__: { load: (def) => { globalThis.__cap = def } } }
