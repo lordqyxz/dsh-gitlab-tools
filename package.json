@@ -1,0 +1,50 @@
+{
+  "name": "dsh-gitlab-tools",
+  "description": "GitLab 工具插件：从 GitLab OpenAPI spec 生成的类型化 SDK（版本对齐 19.x），向 DSH agent 暴露项目/issue/MR/pipeline 工具，含 gitlab_api 全量通用工具；客户端半区提供右侧悬浮 issue 面板 + 设置页",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "tools",
+    "src",
+    "scripts",
+    "README.md",
+    "AGENTS.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime"
+      ]
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  },
+  "license": "MIT"
+}

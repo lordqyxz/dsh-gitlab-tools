@@ -1,0 +1,13 @@
+# 依赖
+node_modules/
+
+# 可再生/下载型构建产物（见 tools/gen-sdk.mjs，可据 README 重新下载）
+tools/openapi_v2.yaml
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
