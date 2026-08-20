@@ -1,6 +1,8 @@
-// Create-a-dev-session-for-an-issue: build the task prompt and (when the current
-// session has a suitable working directory) auto-start a new dev session that
-// implements the issue. No host changes needed — pure client via ctx.get("sessions").
+// Create-a-dev-session-for-an-issue: fetch the issue body + comments up front,
+// embed them in the startup prompt (so the agent doesn't spend tokens/rounds
+// re-fetching), then (when a working directory is available) auto-start a new
+// dev session. No host changes needed — pure client via ctx.get("sessions") and
+// the existing /gitlab-tools proxy GET routes.
 
 import type { DevNotice, Issue, ProjectDir } from "./types";
 import { registerIssueSession } from "./session-store";
@@ -36,10 +38,53 @@ export function resolveWorkspaceId(ctx: unknown, cwd: string): string | undefine
   return best?.workspaceId;
 }
 
+/** Issue body + comments, fetched once at startup and embedded in the prompt. */
+export type IssueContext = { description: string; notes: string };
+
+/**
+ * Pull the issue's full description and its discussion thread through the host
+ * proxy (GET routes, no token in the browser). Failures degrade gracefully to
+ * empty strings — the prompt still works, the agent just falls back to tools.
+ */
+export async function fetchIssueContext(project: string | undefined, iid: number): Promise<IssueContext> {
+  const qp = `project=${encodeURIComponent(project ?? "")}&iid=${iid}`;
+  let description = "";
+  let notes = "";
+  try {
+    const r = await fetch(`/gitlab-tools/issue?${qp}`, { cache: "no-store" });
+    const j = await r.json();
+    if (j && j.ok === true && j.issue && typeof j.issue.description === "string") {
+      description = j.issue.description;
+    }
+  } catch {
+    /* optional */
+  }
+  try {
+    const r = await fetch(`/gitlab-tools/issue/notes?${qp}`, { cache: "no-store" });
+    const j = await r.json();
+    if (j && j.ok === true && Array.isArray(j.notes)) {
+      notes = j.notes
+        .map((n) => {
+          const who = n.system ? "系统" : `@${n.author?.username ?? "?"}`;
+          const when = n.created_at ? `_(${n.created_at})_` : "";
+          // Collapse newlines so each comment stays one markdown list item.
+          const body = String(n.body ?? "").replace(/\s*\n\s*/g, " ").trim();
+          return `- **${who}** ${when}: ${body || "（空）"}`;
+        })
+        .join("\n");
+    }
+  } catch {
+    /* optional */
+  }
+  return { description, notes };
+}
+
 /** Build the task prompt handed to the new dev session (auto-started when suitable). */
-export function buildPrompt(issue: Issue, project?: string, cwd?: string): string {
+export function buildPrompt(issue: Issue, project?: string, cwd?: string, context?: IssueContext): string {
   const labels = issue.labels.length ? issue.labels.map((l) => l.name).join(", ") : "无";
   const assignee = issue.assignees.length ? `@${issue.assignees[0].username}` : "未指派";
+  const hasBody = Boolean(context?.description?.trim());
+  const hasNotes = Boolean(context?.notes?.trim());
   return [
     `请处理 GitLab issue #${issue.iid}：${issue.title || "(无标题)"}`,
     "",
@@ -49,8 +94,15 @@ export function buildPrompt(issue: Issue, project?: string, cwd?: string): strin
     cwd ? `- 工作目录：${cwd}` : "- 工作目录：（未设置）",
     "",
     "",
+    "## Issue 内容（启动时已内嵌，无需再调用工具重复拉取）",
+    "### 正文",
+    hasBody ? context!.description.split("\n").map((l) => `> ${l}`).join("\n") : "> （无正文）",
+    "",
+    "### 既有讨论",
+    hasNotes ? context!.notes : "- （无既有讨论）",
+    "",
     "## 开发规程（务必按此执行：先规划、先确认，再动手）",
-    "0. 【只读调研·不写代码】先用 gitlab_view_issue 读取 #${issue.iid} 的完整描述，用 gitlab_list_notes 读取整条讨论（含用户的方案、疑问、回复）；" +
+    "0. 【只读调研·不写代码】基于上面已内嵌的 issue 正文与讨论（不必再 gitlab_view_issue / gitlab_list_notes 重复拉取），" +
       (cwd
         ? `clone/定位仓库后，评估【该 issue 与当前代码的匹配程度】：需求能落在哪些现有模块/代码路径上、改动范围大概多大。`
         : `评估该 issue 与代码的匹配程度：先确定/克隆该项目到合适工作目录。`) +
@@ -58,7 +110,7 @@ export function buildPrompt(issue: Issue, project?: string, cwd?: string): strin
     "1. 【制定 plan】把【开发计划】用 gitlab_create_note 发到 issue #${issue.iid} 的评论里——含：对需求的理解、方案选择、issue 与代码匹配度评估、疑问点、实施步骤、工作量估计。",
     "2. 【更新标签】用 gitlab_api 更新该 issue 的标签以反映当前状态（例如标为「规划中/待确认」或你按需新建的状态标签），但先不要把「进行中」标得太早。",
     "3. 【触发对话·等待确认】把 plan 同步到 issue 评论，必要时在对话里向用户说明并明确询问确认。**等待用户确认后再开始实际开发。**",
-    "4. 【确认后实现】用户确认后，严格按 plan 实现；期间若用户在 issue 评论或对话里回复（答复疑问、给新方案、@ 你），用 gitlab_list_notes 及时重读讨论并把反馈正确加载进执行流，不要忽略。",
+    "4. 【确认后实现】用户确认后，严格按 plan 实现；期间若用户在 issue 评论或对话里回复（答复疑问、给新方案、@ 你，新增的评论不在启动内容里），用 gitlab_list_notes 增量读取新增讨论并把反馈正确加载进执行流，不要忽略。",
     "5. 【收尾】实现完成后，用 gitlab_create_note 在 issue 上补充实现说明/结论（必要时提交 MR），说明如何验证，并把标签更新为已完成/进行中对应的状态。",
     "",
     "## 对话交互",
@@ -73,8 +125,7 @@ export function buildPrompt(issue: Issue, project?: string, cwd?: string): strin
  * return the prompt for the user to copy instead.
  *
  * Grouping: the new session is created with the resolved `workspaceId` of the
- * target folder (not a bare `cwd`), so it lands in the correct workspace group;
- * a bare `cwd` can attach to a wrong/default group.
+ * target folder (not a bare `cwd`), so it lands in the correct workspace group.
  */
 export async function createDevSession(
   ctx: unknown,
@@ -92,11 +143,14 @@ export async function createDevSession(
   if (!sessions || typeof sessions.create !== "function") {
     return { kind: "err", text: "DSH 会话服务不可用，无法创建开发会话" };
   }
+  // Fetch the issue body + comments up front so they can be embedded in the
+  // prompt (saves the agent a round trip + tokens at startup).
+  const context = await fetchIssueContext(project, issue.iid);
   // Target folder: configured project→folder mapping wins, else current cwd.
   const mapped = (projectDirs ?? []).find((m) => normProject(m.project) === normProject(project));
   const cwd = (mapped?.dir && mapped.dir.trim()) || scope?.cwd;
   const suitable = typeof cwd === "string" && cwd.trim() !== "";
-  const prompt = buildPrompt(issue, project, cwd);
+  const prompt = buildPrompt(issue, project, cwd, context);
   try {
     if (!suitable) {
       return {
