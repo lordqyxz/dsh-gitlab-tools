@@ -154,6 +154,19 @@ assert(r.status === 200 && r.json.ok === false && r.json.code === 'not_configure
 
 // ── 3. browser bundle structure ──────────────────────────────────────────────
 globalThis.window = { __ModuleLoader__: { load: (def) => { globalThis.__cap = def } } }
+// micromark's decode-named-character-reference creates a DOM <i> at module load
+// to decode entities; the browser always has `document`, Node doesn't — stub it.
+globalThis.document = {
+  createElement: () => {
+    let innerHTML = ""
+    return {
+      set innerHTML(v) { innerHTML = v },
+      get textContent() { return "" }, // entity decode → false (literal text), fine for structural checks
+      appendChild() {},
+    }
+  },
+  head: { appendChild() {} },
+}
 ;(0, eval)(readFileSync(join(ROOT, 'lib/client.js'), 'utf8'))
 const def = globalThis.__cap
 assert(def && def.id === 'dsh-gitlab-tools' && typeof def.factory === 'function', 'bundle wrapped in ModuleLoader.load')

@@ -10,6 +10,7 @@ import { fmtRelative } from "./format";
 import { C, headerStyle, iconBtnStyle, rootPanelStyle } from "./theme";
 import { IssueList } from "./issue-list";
 import { IssueDetailView } from "./issue-detail";
+import { IssueFilter } from "./issue-filter";
 import { DevNoticePanel } from "./dev-notice";
 import type { DevNotice, Issue } from "./types";
 
@@ -19,7 +20,7 @@ export function GitLabIssuesTab({ ctx, scope, visible }: {
   scope: { sessionId?: string; cwd?: string } | undefined;
   visible?: boolean;
 }) {
-  const { settings, state, loadIssues } = usePanel(visible);
+  const { settings, state, loadIssues, filters, setFilters } = usePanel(visible);
   const [notice, setNotice] = useState<DevNotice | null>(null);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<{ project: string; iid: number } | null>(null);
@@ -109,6 +110,8 @@ export function GitLabIssuesTab({ ctx, scope, visible }: {
       {notice ? (
         <DevNoticePanel notice={notice} onClose={() => setNotice(null)} onOpenSession={openNoticeSession} />
       ) : null}
+
+      <IssueFilter filters={filters} onChange={setFilters} />
 
       <IssueList
         state={state}

@@ -44,6 +44,7 @@
 - mock `ctx` 要给 `get` 方法返回假 `betterSidebar`（`{registerTab}`），否则 `registerIssuesTab` 会走进 500ms×20 的 setInterval 重试分支——测试里它**立即注册成功**、不应起定时器。
 - **断言顺序有依赖**：`POST /settings` 会写 mock 的 `userLayer`（合并进 `current`），后续 `/issues`（不带 project）会读到它——早期一个"失败"其实是测试顺序 bug 不是插件 bug。改断言时先想清楚状态泄漏。
 - 加断言后用 `grep -c "assert("` 对账，别漏。
+- **bundle 现在内联 react-markdown + remark-gfm（2026-08）**：micromark 的 `decode-named-character-reference` 在**模块加载时**就 `document.createElement("i")` → 浏览器没问题，但 `verify.mjs` 在 Node 里 eval bundle 必须先给 `globalThis.document` 一个 stub（`createElement` 返回带 `innerHTML` setter/`textContent` getter 的假元素），否则 `ReferenceError: document is not defined`。bundle 也因此从 ~72KB 涨到 ~485KB（未压缩），属预期。
 
 ## 2. 真实实例冒烟（不打 DSH）
 

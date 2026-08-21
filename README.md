@@ -28,7 +28,7 @@ dsh-gitlab-tools (cordis 插件)
 - **标签颜色同步 GitLab**：issue 请求带 `with_labels_details=true`，宿主把每个标签的 `color`/`text_color`（GitLab 服务器设定的背景色 + 对比文字色）一并脱敏下发，客户端标签 chip 直接用这套配色渲染——标签在侧边栏与 GitLab web 端颜色一致。
 - **从 issue 一键创建开发会话（▶ 播放三角按钮）**：每张卡片底部有**播放三角（▶）**——点击后自动把「处理该 issue」的任务发给新开发会话（agent 先调研匹配度→制定 plan→更新标签→等你确认后才实现）。**工作区分组**：新会话用目标文件夹的 `workspaceId` 创建（不是裸 cwd），保证落在该 issue 项目对应的工作区/分组里；目标文件夹取自设置页的「项目→本地文件夹映射」（`group/project` → 本地路径），未配置则回落到当前会话工作目录。无法确定工作目录时不自动启动，只给可复制提示词。
 - **开发会话实时进度（卡片底部）**：**开始（▶）/ 停止（■）/ 打开（▶）按钮与统计信息统一放在卡片底部**——运行/已结束 圆点 + **token 消耗**（⬆输入 / ⬇输出 / Σ合计）+ **token 速度**（tok/s）。配色区分：开发中=绿点、已结束=灰点、停止=红、开始/打开=品牌橙。token 数据由宿主读该会话的事件日志（`assistant/message` 的 `usage`）聚合而来，经 `/session/stats` 代理返回（token 不出服务端）。
-- **点击 issue = 标签内详情 + 讨论（不跳 web）**：点条目直接在标签内展开 issue 内容（标题/状态/标签/指派/里程碑 + 描述）与完整讨论消息流，底部评论框可直接发评论（支持 Markdown，⌘/Ctrl+Enter 发送）。AI 在开发会话里用 `gitlab_create_note` 评论，详情刷新即见；你发的评论以配置 token 所属账号发布。描述/评论由客户端内置轻量 Markdown 渲染（先转义、无 XSS；GitLab 的 `render_html` 在该实例不生效）。
+- **点击 issue = 标签内详情 + 讨论（不跳 web）**：点条目直接在标签内展开 issue 内容（标题/状态/标签/指派/里程碑 + 描述）与完整讨论消息流，底部评论框可直接发评论（支持 Markdown，⌘/Ctrl+Enter 发送）。AI 在开发会话里用 `gitlab_create_note` 评论，详情刷新即见；你发的评论以配置 token 所属账号发布。描述/评论由客户端用开源 `react-markdown` + `remark-gfm` 渲染（完整 CommonMark + GFM：加粗/表格/代码围栏等；渲染成 React 元素、原始 HTML 自动转义，无 XSS；GitLab 的 `render_html` 在该实例不生效）。
 - **双身份（区分谁发评论）**：可选「AI 专属 token」——给 DeepSeek Harness 用的 Service Account 配一个 PAT（scope 至少 `api`）填到设置页「AI 专属 token」，之后 agent 工具（含评论）一律以该 AI 身份发布、你在侧边栏的评论以你自己的账号发布，讨论里作者天然区分。未配置则 agent 回落用主 token（行为不变）。
 - **设置页**（`settings.section` 槽位，设置 →「GitLab Issues」）：配置默认项目 `defaultProject` 与刷新间隔 `refreshMs`，带「测试连接」。
 - **主题**：配色只用 DSH 设计系统真实存在的 `--dsw-alias-*` token，随 `body[data-ds-dark-theme]` 自适应白天/夜间主题。

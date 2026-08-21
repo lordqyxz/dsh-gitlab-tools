@@ -35,7 +35,12 @@ export type Note = {
   body: string;
   system: boolean;
   created_at: string;
-  author: { username: string; name?: string } | null;
+  author: {
+    username: string;
+    name?: string;
+    /** Full GitLab avatar URL (public /uploads path); null when unavailable. */
+    avatar_url?: string | null;
+  } | null;
 };
 
 /** Project (path_with_namespace) → local folder, used to place dev sessions. */
@@ -52,6 +57,14 @@ export type SettingsResp = {
   aiTokenConfigured?: boolean;
   code?: string;
   message?: string;
+};
+
+/** List filters for the issues panel (mirrors GitLab's issue search). */
+export type PanelFilters = {
+  /** Full-text search on title/description (server-side). */
+  search: string;
+  /** "assigned_to_me" (default) only lists issues assigned to the current user. */
+  scope: "assigned_to_me" | "all";
 };
 
 export type IssuesResp = {

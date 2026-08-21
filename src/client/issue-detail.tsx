@@ -3,7 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { useIssueDetail } from "./use-issue-detail";
-import { ensureMarkdownCss, renderMarkdown } from "./markdown";
+import { ensureMarkdownCss, Markdown } from "./markdown";
 import type { MdLinks } from "./markdown";
 import { NoteRow } from "./note-row";
 import {
@@ -93,7 +93,7 @@ export function IssueDetailView({ project, iid, onBack }: {
             {issue.description ? (
               <div style={{ padding: "8px 10px", borderBottom: `1px solid ${C.borderThin}` }}>
                 <div style={{ fontSize: "11px", color: C.caption, marginBottom: "4px" }}>描述</div>
-                <div className="gt-md" dangerouslySetInnerHTML={{ __html: renderMarkdown(issue.description, links) }} />
+                <Markdown text={issue.description} links={links} />
               </div>
             ) : null}
 
