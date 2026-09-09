@@ -2,7 +2,7 @@
 // Two additive surfaces, no shipped UI displaced:
 //   1. dsh-better-sidebar tab → a "GitLab Issues" activity-bar tab (same level
 //      as explorer / git / subagent / terminal / browser), registered through
-//      the better-sidebar service (`ctx.get('betterSidebar').registerTab`).
+//      the better-sidebar service (`betterSidebar.registerTab`).
 //      Each issue row can spawn a dev session that implements it.
 //   2. settings.section       → a "GitLab Issues" settings page.
 //
@@ -25,7 +25,7 @@ import { SettingsCard } from "./settings";
 
 const inject = ["slots"];
 
-/** dsh-better-sidebar tab descriptor (same level as explorer/git/subagent/terminal/browser). */
+/** dsh-better-sidebar tab descriptor (same level as explorer/git/subagent/terminal). */
 const TAB_DESCRIPTOR = {
   id: "gitlab-tools:issues",
   title: "GitLab Issues",
@@ -33,32 +33,61 @@ const TAB_DESCRIPTOR = {
   order: 60,
   single: true,
   component: GitLabIssuesTab,
+  // 声明式「功能设置」：字段持久化在 better-sidebar 的 pluginSettings["gitlab-tools:issues"]，
+  // 优先级高于设置页（host 路由）的同类配置；见 use-panel.ts 的合并逻辑。
+  settings: {
+    pluginToggles: [
+      {
+        key: "defaultProject",
+        type: "text",
+        title: "默认项目 / Default project",
+        placeholder: "group/project",
+        desc: "留空回退到设置页的默认项目 / Empty falls back to the settings page value",
+      },
+      {
+        key: "refreshMs",
+        type: "number",
+        min: 5000,
+        max: 3600000,
+        unit: "ms",
+        title: "刷新间隔 / Refresh interval",
+        desc: "覆盖设置页的轮询间隔 / Overrides the settings page polling interval",
+      },
+    ],
+  },
 };
 
-function registerIssuesTab(ctx: { get: (name: string) => unknown }) {
-  const tryRegister = () => {
-    const bs = ctx.get("betterSidebar") as { registerTab?: (d: unknown) => void } | null | undefined;
-    if (bs && typeof bs.registerTab === "function") {
-      try {
-        bs.registerTab(TAB_DESCRIPTOR);
-        return true;
-      } catch (e) {
-        console.error("[gitlab-tools] betterSidebar registerTab failed:", e);
-      }
-    }
-    return false;
-  };
-  // better-sidebar applies before us in the boot graph, but retry briefly as a
-  // safety net for future load-order changes; the settings page stays up either way.
-  if (tryRegister()) return;
-  let tries = 0;
-  const timer = window.setInterval(() => {
-    tries += 1;
-    if (tryRegister() || tries >= 20) window.clearInterval(timer);
-  }, 500);
+/** Services the sub-fiber (ctx.inject callback) may touch. betterSidebar is declared there. */
+interface InjectedCtx {
+  effect: (fn: () => unknown, name?: string) => unknown;
+  betterSidebar: { registerTab: (descriptor: unknown) => () => void };
 }
 
-function apply(ctx: { slots: { inject: (name: string, factory: () => unknown) => unknown }; get: (name: string) => unknown }) {
+interface PluginCtx {
+  slots: { inject: (name: string, factory: () => unknown) => unknown };
+  effect: (fn: () => unknown, name?: string) => unknown;
+  inject: (services: string[], cb: (svc: InjectedCtx) => unknown) => { dispose: () => void };
+}
+
+function registerIssuesTab(ctx: PluginCtx) {
+  // Wait on the betterSidebar service (cordis inject fiber) instead of the old
+  // 500ms×20 polling cap: dsh-better-sidebar 0.18+ mounts its client half later
+  // than the fixed 10s window assumed, so the cap expired before the service
+  // existed and the tab silently never registered (regression 2026-09). The
+  // inject fiber parks until the service appears; if dsh-better-sidebar is
+  // absent it stays pending harmlessly and the settings page keeps working.
+  ctx.effect(() => {
+    const fiber = ctx.inject(["betterSidebar"], (svc) =>
+      svc.effect(
+        () => svc.betterSidebar.registerTab(TAB_DESCRIPTOR),
+        "gitlab-tools: register issues tab",
+      ),
+    );
+    return () => fiber.dispose();
+  }, "gitlab-tools: betterSidebar tab");
+}
+
+function apply(ctx: PluginCtx) {
   ctx.slots.inject("settings.section", () =>
     ctx.slots.register(
       {

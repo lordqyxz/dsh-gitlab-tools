@@ -22,10 +22,19 @@ function issueQuery(filters: PanelFilters, project?: string): string {
   return qs ? `?${qs}` : "";
 }
 
-export function usePanel(active = true) {
+export function usePanel(
+  active = true,
+  /** better-sidebar 声明式「功能设置」覆盖值（pluginSettings["gitlab-tools:issues"]）；非空时优先于 host 设置。 */
+  overrides: { defaultProject?: string; refreshMs?: number } = {},
+) {
   const [settings, setSettings] = useState<{ defaultProject: string; refreshMs: number; projectDirs: ProjectDir[] } | null>(null);
   const [state, setState] = useState<PanelState>({ loading: true, data: null, error: null });
   const [filters, setFiltersState] = useState<PanelFilters>(DEFAULT_FILTERS);
+
+  // Keep the latest overrides in a ref so the poll loop reads them fresh on
+  // every tick — a better-sidebar 功能设置 change takes effect without a remount.
+  const overridesRef = useRef(overrides);
+  overridesRef.current = overrides;
 
   // Keep the latest filters/refreshMs in refs so the poll loop and the debounced
   // filter effect always read fresh values without re-registering themselves.
@@ -60,9 +69,15 @@ export function usePanel(active = true) {
       .then((json: SettingsResp) => {
         if (!json || json.ok !== true) return;
         setSettings((prev) => {
+          // 优先级：better-sidebar 功能设置（pluginSettings）> host 设置页 > 内置默认。
+          const ov = overridesRef.current;
           const next = {
-            defaultProject: json.defaultProject ?? "",
-            refreshMs: json.refreshMs ?? 120000,
+            defaultProject:
+              typeof ov.defaultProject === "string" && ov.defaultProject.trim() !== ""
+                ? ov.defaultProject
+                : json.defaultProject ?? "",
+            refreshMs:
+              typeof ov.refreshMs === "number" ? ov.refreshMs : json.refreshMs ?? 120000,
             projectDirs: json.projectDirs ?? [],
           };
           if (

@@ -192,12 +192,27 @@ const slots = {
 const fakeBetterSidebar = {
   registerTab: (descriptor) => { tabs.push(descriptor); return () => {} },
 }
-loaded.apply({ slots, get: (name) => (name === 'betterSidebar' ? fakeBetterSidebar : undefined) })
+// Real-cordis twins: effect() runs its callback now (disposer = return value);
+// inject(services, cb) parks until the services exist — in the mock they exist,
+// so the callback runs immediately with the services declared on the sub-ctx.
+const clientCtx = {
+  slots,
+  effect: (fn) => fn(),
+  betterSidebar: undefined,
+}
+clientCtx.inject = (services, cb) => {
+  if (services.includes('betterSidebar')) clientCtx.betterSidebar = fakeBetterSidebar
+  cb(clientCtx)
+  return { dispose: () => {} }
+}
+loaded.apply(clientCtx)
 const overlay = registered.find((e) => e.name === 'shell.overlay')
 assert(!overlay, 'no shell.overlay entry (moved into better-sidebar)')
 const section = registered.find((e) => e.name === 'settings.section')
 assert(Boolean(section) && section.entry.id === 'gitlab-tools' && section.entry.label === 'GitLab Issues', 'registers settings.section entry')
 assert(tabs.length === 1 && tabs[0].id === 'gitlab-tools:issues' && tabs[0].single === true && typeof tabs[0].component === 'function' && typeof tabs[0].icon === 'function', 'registers better-sidebar tab gitlab-tools:issues')
+const decl = tabs[0].settings?.pluginToggles ?? []
+assert(decl.length === 2 && decl.some((r) => r.key === 'defaultProject' && r.type === 'text') && decl.some((r) => r.key === 'refreshMs' && r.type === 'number'), 'declares pluginToggles settings (defaultProject/refreshMs)')
 
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall checks passed')
