@@ -151,7 +151,7 @@ export function SettingsCard() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "12px", maxWidth: "560px" }}>
+    <div style={{ boxSizing: "border-box", display: "flex", flexDirection: "column", gap: "12px", padding: "10px 10px 12px", overflowY: "auto", minHeight: "0", flex: "1 1 auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
         <span style={{ color: C.brand }}>
           <IssueMark size={16} />
