@@ -7,6 +7,7 @@ import { Readable } from 'node:stream'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { tmpdir } from 'node:os'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 let failures = 0
@@ -22,11 +23,12 @@ assert(typeof mod.apply === 'function' && mod.inject.includes('tools'), 'host ap
 // ── 2. host routes (mock ctx) ────────────────────────────────────────────────
 function makeCtx(config) {
   const routes = []
+  const tools = []
   const userLayer = {}
   const creds = new Map()
   const ctx = {
     logger: { info() {}, warn() {} },
-    tools: { register() {} },
+    tools: { register(t) { tools.push(t) } },
     credentials: {
       resolve: async (ref) => { const v = creds.get(ref); return v === undefined ? undefined : { value: v, source: 'mock' } },
       describe: async (ref) => ({ configured: creds.has(ref), source: creds.has(ref) ? 'mock' : undefined, writable: true }),
@@ -46,7 +48,7 @@ function makeCtx(config) {
     webServer: { register(route) { routes.push(route); return () => {} } },
     effect(fn) { const ret = fn(); return ret },
   }
-  return { ctx, routes, userLayer, creds }
+  return { ctx, routes, tools, userLayer, creds }
 }
 
 function makeRes() {
@@ -59,16 +61,17 @@ function makeRes() {
   }
 }
 
-function makeReq(method, path, body) {
+function makeReq(method, path, body, headers) {
   const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))])
   req.method = method
   req.url = path
+  req.headers = headers || {}
   return req
 }
 
-async function call(route, method, path, body) {
+async function call(route, method, path, body, headers) {
   const res = makeRes()
-  await route.handler(makeReq(method, path, body), res)
+  await route.handler(makeReq(method, path, body, headers), res)
   return { status: res._status, json: res._data ? JSON.parse(res._data) : null }
 }
 
@@ -213,6 +216,107 @@ assert(Boolean(section) && section.entry.id === 'gitlab-tools' && section.entry.
 assert(tabs.length === 1 && tabs[0].id === 'gitlab-tools:issues' && tabs[0].single === true && typeof tabs[0].component === 'function' && typeof tabs[0].icon === 'function', 'registers better-sidebar tab gitlab-tools:issues')
 const decl = tabs[0].settings?.pluginToggles ?? []
 assert(decl.length === 2 && decl.some((r) => r.key === 'defaultProject' && r.type === 'text') && decl.some((r) => r.key === 'refreshMs' && r.type === 'number'), 'declares pluginToggles settings (defaultProject/refreshMs)')
+
+// ── 4. webhook 接收端点（可选功能，config.webhookSecretToken）──────────────
+const { ctx: wctx, routes: wroutes, tools: wtools } = makeCtx()
+await mod.apply(wctx, {
+  host: 'https://gl.example.com', token: 'glpat-x', timeoutMs: 60000,
+  webhookSecretToken: 'whsec-1',
+  webhookEventsFile: join(tmpdir(), `gl-webhook-test-${process.pid}-${Date.now()}.jsonl`),
+})
+const wroute = wroutes.find((r) => r.kind === 'prefix' && r.path === '/gitlab-tools')
+const pushBody = { object_kind: 'push', user_name: 'alice', ref: 'refs/heads/main', total_commits_count: 2, project: { id: 7, path_with_namespace: 'group/demo' } }
+let wr = await call(wroute, 'POST', '/gitlab-tools/webhook', pushBody, { 'x-gitlab-token': 'bad' })
+assert(wr.status === 401, 'webhook: 错 token → 401')
+wr = await call(wroute, 'GET', '/gitlab-tools/webhook', undefined, { 'x-gitlab-token': 'whsec-1' })
+assert(wr.status === 405, 'webhook: GET → 405')
+wr = await call(wroute, 'POST', '/gitlab-tools/webhook', pushBody, { 'x-gitlab-token': 'whsec-1', 'x-gitlab-webhook-uuid': 'u-1' })
+assert(wr.status === 200 && wr.json.ok === true, 'webhook: 合法 push → 200 落盘')
+wr = await call(wroute, 'POST', '/gitlab-tools/webhook', pushBody, { 'x-gitlab-token': 'whsec-1', 'x-gitlab-webhook-uuid': 'u-1' })
+assert(wr.status === 200 && wr.json.dedup === true, 'webhook: 同 uuid 重发 → dedup 不重复落盘')
+const noteBody = { object_kind: 'note', user: { username: 'bob' }, issue: { iid: 12, title: '登录页崩溃' }, object_attributes: { note: '@agent-bot 看一下' }, project: { id: 7, path_with_namespace: 'group/demo' } }
+wr = await call(wroute, 'POST', '/gitlab-tools/webhook', noteBody, { 'x-gitlab-token': 'whsec-1', 'x-gitlab-webhook-uuid': 'u-2' })
+assert(wr.status === 200, 'webhook: note 事件 → 200')
+const evTool = wtools.find((t) => t.name === 'gitlab_webhook_events')
+assert(Boolean(evTool), 'webhook: 注册 gitlab_webhook_events 工具')
+const evOut = await evTool.execute({ detail: false })
+assert(evOut.text.includes('接收器状态') && evOut.text.includes('bob 评论 issue #12'), 'webhook: 查询工具输出状态+note 摘要')
+assert(Array.isArray(evOut.json.events) && evOut.json.events.length === 2, 'webhook: 查询工具 json.events')
+
+// 未启用实例：路由 404 webhook-disabled，工具报未启用
+const { ctx: dctx, routes: droutes, tools: dtools } = makeCtx()
+await mod.apply(dctx, { host: 'https://gl.example.com', token: 'glpat-x', timeoutMs: 60000 })
+const droute = droutes.find((r) => r.kind === 'prefix' && r.path === '/gitlab-tools')
+const dr = await call(droute, 'POST', '/gitlab-tools/webhook', pushBody)
+assert(dr.status === 404 && dr.json.code === 'webhook-disabled', 'webhook: 未启用 → 404 webhook-disabled')
+const dTool = dtools.find((t) => t.name === 'gitlab_webhook_events')
+const dOut = await dTool.execute({})
+assert(dOut.text.includes('webhook=off') && dOut.text.includes('轮询=off'), 'webhook: 未启用时查询工具如实报告（webhook=off）')
+
+// ── 5. listener：响应器 + 轮询器（离线单测，不碰定时器）───────────────────
+const lst = await import(join(ROOT, 'lib/listener.js'))
+assert(lst.mentionsUser('@agent-bot 看看', 'agent-bot') && !lst.mentionsUser('普通评论', 'agent-bot'), 'listener: mentionsUser 命中/不误触')
+
+const lstStateFile = join(tmpdir(), `gl-listener-${process.pid}-${Date.now()}.json`)
+const lstState = {}
+const lstEvents = []
+const lstStore = { append(rec) { lstEvents.push(rec) } }
+const promptCalls = []
+const agentCreates = []
+const mockAgents = { create: async (opts) => { agentCreates.push(opts); return { agent: {}, dispose: async () => {} } } }
+const mockController = { prompt: async (req) => { promptCalls.push(req) } }
+const responder = lst.createResponder({ agents: mockAgents, controller: mockController, store: lstStore, state: lstState, stateFile: lstStateFile, mentionUsername: 'agent-bot', resolveCwd: () => '/Users/apple/dev' })
+const hitNote = (author) => ({ project: 'g/p', issue: { iid: 1, title: 't', description: 'd' }, note: { body: '@agent-bot 帮我看下', author: { username: author } } })
+assert((await responder.handle({ project: 'g/p', issue: { iid: 1 }, note: { body: '随便说说', author: { username: 'bob' } } })) === 'no-mention', 'listener: 无 @mention → no-mention')
+assert((await responder.handle(hitNote('agent-bot'))) === 'skip-self-note', 'listener: SA 自己的 note → skip-self-note（防环）')
+const o3 = await responder.handle(hitNote('bob'))
+assert(o3.startsWith('responded:session-'), 'listener: 命中 → 创建会话注入（' + o3 + '）')
+assert(promptCalls.length === 1 && promptCalls[0].mode === 'queue' && promptCalls[0].content[0].text.includes('gitlab_create_note') && agentCreates.length === 1 && /^session-[0-9a-f-]{36}$/.test(agentCreates[0].sessionId) && agentCreates[0].meta?.cwd === '/Users/apple/dev', 'listener: 两步链注入（sessionId+meta.cwd+queue+回复指令）')
+await responder.handle(hitNote('bob'))
+await responder.handle(hitNote('bob'))
+assert((await responder.handle(hitNote('bob'))) === 'rate-limited', 'listener: 每 issue 频率上限（第 4 次/小时被限）')
+const responder2 = lst.createResponder({ store: lstStore, state: {}, stateFile: lstStateFile, mentionUsername: 'agent-bot' })
+assert((await responder2.handle(hitNote('bob'))) === 'no-agents-service', 'listener: 无 agents 服务 → 降级 no-agents-service')
+
+// 轮询器：mock client.raw（issues / merge_requests / notes 三个端点）
+const pollEvents = []
+const pollState = {}
+const pollStateFile = join(tmpdir(), `gl-poll-${process.pid}-${Date.now()}.json`)
+const mkNote = (id, msAgo, body, author = 'bob') => ({ id, created_at: new Date(Date.now() - msAgo).toISOString(), body, author: { username: author }, system: false })
+const mockClient = {
+  raw: async ({ path }) => {
+    if (path.endsWith('/issues')) return { data: [{ iid: 12, title: '登录页崩溃', description: 'desc', state: 'opened', web_url: 'u', project_id: 7 }] }
+    if (path.includes('/merge_requests')) return { data: [] }
+    if (path.includes('/notes')) return { data: [mkNote(900, 1000, '@agent-bot 看下'), mkNote(890, 600000, '旧评论'), { ...mkNote(895, 1000, '系统通知', 'x'), system: true }] }
+    return { data: [] }
+  },
+}
+const pollResponder = lst.createResponder({ agents: mockAgents, controller: mockController, store: { append() {} }, state: {}, stateFile: pollStateFile, mentionUsername: 'agent-bot' })
+const poller = lst.createPoller({ client: mockClient, store: { append(rec) { pollEvents.push(rec) } }, responder: pollResponder, state: pollState, stateFile: pollStateFile, projects: ['g/p'], intervalMs: 30000 })
+const r1 = await poller.cycle()
+assert(r1.notes === 1, 'listener: 轮询拉到 1 条新 note（旧评论/系统注释剔除）')
+assert(pollEvents.length === 1 && pollEvents[0].source === 'poll' && String(pollEvents[0].responder).startsWith('responded:'), 'listener: 轮询事件入库（source=poll）并触发响应')
+assert(pollState.lastPollAt && pollState.seenNotes.includes('g/p:issue:900'), 'listener: 游标与已见 note id 落盘')
+const r2 = await poller.cycle()
+assert(r2.notes === 0 && pollEvents.length === 1, 'listener: 第二轮去重不再入库')
+const wh = lst.normalizeWebhookRecord({ payload: { object_kind: 'note', user: { username: 'bob' }, issue: { iid: 3, title: 'T' }, object_attributes: { id: 9, note: '@agent-bot hi' } } })
+assert(wh && wh.note.body === '@agent-bot hi' && wh.issue.iid === 3, 'listener: webhook 记录归一化为响应事件')
+
+// ntfy 订阅源消息处理器：入库/响应/跨源去重
+const ntfyEvents = []
+const ntfyState = {}
+const ntfyStateFile = join(tmpdir(), `gl-ntfy-${process.pid}-${Date.now()}.json`)
+const ntfyResponder = lst.createResponder({ agents: mockAgents, controller: mockController, store: { append() {} }, state: {}, stateFile: ntfyStateFile, mentionUsername: 'agent-bot' })
+const handleNtfy = lst.makeNtfyMessageHandler({ store: { append(rec) { ntfyEvents.push(rec) } }, responder: ntfyResponder, state: ntfyState, stateFile: ntfyStateFile })
+const msg = (id, time, payload) => ({ id, time, event: 'message', message: JSON.stringify(payload) })
+assert((await handleNtfy({ id: 'x', event: 'open' })) === 'skip-event', 'ntfy: 非 message 事件跳过')
+const oN1 = await handleNtfy(msg('m1', 1789100000, { object_kind: 'note', user: { username: 'bob' }, issue: { iid: 12, title: 'T' }, object_attributes: { id: 900, note: '@agent-bot ntfy 测试' }, project: { id: 14, path_with_namespace: 'ty/data-flow' } }))
+assert(oN1.startsWith('responded:session-'), 'ntfy: note 命中 → 注入会话（' + oN1 + '）')
+assert(ntfyEvents.length === 1 && ntfyEvents[0].source === 'ntfy' && ntfyEvents[0].project === 'ty/data-flow', 'ntfy: 事件入库 source=ntfy')
+assert((await handleNtfy(msg('m2', 1789100001, { object_kind: 'note', user: { username: 'bob' }, issue: { iid: 12 }, object_attributes: { id: 900, note: '重复' }, project: { path_with_namespace: 'ty/data-flow' } }))) === 'dedup', 'ntfy: 同 note 再来 → 跨源去重 dedup')
+const oN3 = await handleNtfy(msg('m3', 1789100002, { object_kind: 'push', project: { path_with_namespace: 'ty/data-flow' } }))
+assert(oN3 === 'not-actionable' && ntfyEvents.length === 2, 'ntfy: push 事件入库但不触发响应')
+assert(ntfyState.ntfySince === 1789100002, 'ntfy: since 游标推进')
 
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall checks passed')

@@ -57,6 +57,25 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 
 6. **client 懒加载**：`createClient` 纯配置构造（零子进程），`apply` 里用 `clientPromise ??=` 记忆化，首个工具调用才构建。
 
+13. **GitLab webhook 接收（可选功能，2026-09）**：`lib/webhook.js`（纯 Node、零 cordis 依赖、可离线测）+ `lib/index.js` 装配。
+    - **启用**：插件 config（cordis.patch.yml 的 gitlab-tools insert）加 `webhookSecretToken`（值 = GitLab webhook 设置里的 Secret token）；**为空 = 功能关闭**（POST /gitlab-tools/webhook → 404 `webhook-disabled`，不建 store、事件不落盘）。改 insert config 热生效（cordis 重新 apply）。
+    - **端点**：`POST /gitlab-tools/webhook`（挂在既有 prefix 路由下，分支在最前）。fail-closed：token 不匹配 401、非 POST 405、体 >2MB 400；`X-Gitlab-Webhook-UUID` 去重（GitLab 重试重发同 uuid）；`webhookProjectWhitelist` 白名单（空 = 全收；白名单外 202 + 记录标 skipped）。
+    - **事件落盘**：`webhookEventsFile`（默认 `~/.dsh/gitlab-tools/webhook-events.jsonl`，超 `webhookMaxFileLines` 2000 行自动保留后半）。**会被 dsh-config-sync 同步到 iCloud**，payload 含项目内容，介意就加进 config-sync excludes。
+    - **查询工具**：`gitlab_webhook_events`（首行接收器状态：文件路径/总数/类型分布；`detail: true` 附 payload）。
+    - **测试**：`node test/verify.mjs` 第 4 节（mock：401/405/200 落盘/dedup/note 摘要/未启用 404 + 工具如实报告）。
+    - **连接层（GitLab→本机，未定）**：GitLab 在公网 VPS（47.97.44.134:8443），本机 GUI 127.0.0.1:3080。首选 SSH 反向隧道（`ssh -N -R 127.0.0.1:3081:127.0.0.1:3080 vps`，GitLab URL 填 `http://127.0.0.1:3081/gitlab-tools/webhook`，Admin 后台开「允许 webhook 请求本地网络」）；无 SSH 权限则 cloudflared + 只转发该路径的本机中转进程（**勿直接暴露 3080，整个 GUI 会公网可达**）。
+    - **Phase 2（issue @mention 自动响应，未实现）**：note 事件 + `payload.issue` 存在 + 正文含 SA 用户名 → 宿主端会话注入（参考客户端「创建开发会话」的 `sessions.create({ workspaceId })` + `binding(id).session.prompt(prompt, 'queue')` 模式定位宿主等价 API）→ 以 aiToken（SA id=42）POST issue note。**防环**：忽略 `author.username === SA 用户名` 的 note（bot 自己的评论同样触发 note webhook）+ 同一 issue 频率上限。MR 事件只落盘展示不自动响应。
+
+14. **事件监听管道（轮询源 + @mention 自动响应，2026-09）**：`lib/listener.js`（纯 Node，零 cordis 依赖）+ index.js 装配；与 webhook 推送源共用 EventStore 与响应管道。
+    - **轮询源**：config `webhookPollProjects`（要监听的项目，空=关闭）+ `webhookPollIntervalMs`（默认 30s，最小 10s）。拉 `issues/merge_requests?order_by=updated_at&updated_after=<游标>` → 新 notes（`sort=desc&per_page=30`，剔 system）→ 按 `project:kind:noteId` 去重；游标 + 已见 id 落盘 `webhookPollStateFile`（默认 ~/.dsh/gitlab-tools/webhook-poll-state.json），**重启不重放**。用 setTimeout 链（非 setInterval）防慢周期堆叠；ctx.effect 注册，卸载自清。
+    - **自动响应**：config `webhookMentionUsername`（SA 用户名，空=只记录不响应）。note 命中 @mention → `buildMentionPrompt`（内嵌 issue 标题/描述/触发评论）→ 宿主注入两步链（见下）→ **agent 自己用 gitlab_create_note（aiToken/SA 身份）回复**，响应器不等 turn 完成。**防环**：忽略 author.username===mentionUsername 的 note（bot 自己的评论同样触发 note webhook/轮询）；`responded` 状态文件里每 issue 每小时上限 3 次。
+    - **宿主注入两步链（冒烟实证 2026-09）**：客户端门面的 `binding(id).session.prompt` 在宿主侧不存在（冒烟实测 `create({})` 报 session header id 不匹配）；**也不要先 `sessions.create`**——`agents.create` 的工厂内部自己发布会话，预建同 id 会话会报 already exists。
+    正确形状：`await ctx.agents.create({ sessionId: `'session-' + randomUUID()` })`（一体化建会话+挂 agent+启 loop）→ `await ctx.sessionController.prompt({ requestId: randomUUID(), sessionId, mode: `'queue'`, content: [{ type: `'text'`, text }] })`（GUI 发消息同一 API）。
+    inject 需含 `agents`/`sessionController`。**冒烟路由 `POST /gitlab-tools/webhook-smoke`** 保留，逐步报告链路状态；降级链：no-agents-service → no-session-controller。
+    - **共用管道**：webhook 推送源经 handler `respond` 回调走同一 responder（`normalizeWebhookRecord` 把 GitLab 原始 payload 归一化成 note/issue 顶层形状）；轮询源在 cycle 内直接调用。respond 失败不阻断入库（record.responder 记录错误）。
+    - **工具**：`gitlab_webhook_events` head 含轮询/响应状态；`gitlab_webhook_poll_now` 手动触发一轮（验证用）。测试：verify.mjs 第 5 节（防环/限流/降级/游标/去重，mock client+sessions，不碰定时器）。
+    - **注意**：改 webhookPollProjects/webhookMentionUsername 走 insert config（热生效，cordis 重新 apply 会重建 listener 与定时器）。
+
 ## 常用操作
 
 - 改工具：改 `lib/index.js`（`defineTool` + `ctx.tools.register`），工具名 `gitlab_*` 前缀。
