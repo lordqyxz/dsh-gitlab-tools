@@ -81,3 +81,32 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 - 改工具：改 `lib/index.js`（`defineTool` + `ctx.tools.register`），工具名 `gitlab_*` 前缀。
 - SDK 升级对齐：`node tools/gen-sdk.mjs`（先更新 `tools/openapi_v2.yaml`），重跑生成+补丁+编译。
 - 验证：`node test/verify.mjs`（路由 mock 冒烟 + bundle 结构断言）；真实实例冒烟用 `lib/sdk.js` 的 `createClient`。
+
+## 15. 全事件响应机制（出站桥 + pipeline 分诊 + 跨源去重，2026-09）
+
+### 出站桥（session → GitLab，lib/outbound.js）
+
+- 宿主 index.js 以官方持久化插件同一惯用法订阅宿主事件：\`ctx.on('session/event', (session, event) => …)\`（agent 子 fiber 产生的会话事件会到达插件 ctx；官方 dsh-session-persistence-jsonl 的 install() 同款用法）。事件交给 \`createOutbound().handleSessionEvent\`。
+- 提交点 = \`turn/end\` 且 \`reason.kind ∈ {completed, max-tokens}\`；最终回复 = 该 turn 最后一条**未中断** assistant/message 的 text 块（\`extractFinalText(session.events, turn)\`；session.events 不可用时退回 assistant/message 到达时写入的内存 stash）。aborted / error / blocked / interrupted 不贴回。
+- 只有**绑定线程**的会话出站：入站响应器创建会话时在 \`state.sessionIndex[sessionId]\` 写 \`{ key, project, kind: 'issue'|'mr', iid }\`；GUI 手开的开发会话不在表内，不受影响。同 (session, turn) 只贴一次（\`state.outbound\` 有界 100 条）。kind=mr → \`/merge_requests/:iid/notes\`，issue → \`/issues/:iid/notes\`；一律 aiToken（SA）身份发布。
+- \`handleSessionEvent\` 绝不 throw（失败返回 \`post-failed:*\` 字符串）——事件监听器不能破坏会话 loop。
+- 模型已被明确告知（三份提示词的「回复通道」段 + \`gitlab_create_note\` 工具描述）：最终回复由系统自动贴回、不要自己调用 gitlab_create_note 发回复、人类后续评论会自动送进会话。
+
+### pipeline 分诊（MR 流水线失败 → 分诊会话）
+
+- \`normalizeWebhookRecord\` 扩展：object_kind=pipeline 且 payload 带 merge_request → 事件形状 \`{ pipeline, merge_request, failedJobs }\`（failedJobs 从 payload.builds 过滤）；非 MR 流水线返回 null（只落盘）。**轮询器不产 pipeline 事件**——分诊是推送源（webhook/ntfy）专属能力，轮询兜底不含它。
+- \`responder.handlePipeline\`：status=failed 且有 MR 才触发；failedJobs 不足时经 client 拉 \`/pipelines/:id/jobs?scope=failed\` 预取；提示词含 MR/分支/流水线/失败作业 + 排查线索（jobs/:id/trace）+ 回复通道；会话绑定 kind='mr'，分诊结论自动贴回 MR 评论。config \`webhookPipelineTriage\` 可关（默认开）。
+- 频率上限复用 responded（key \`project#mr-<iid>\` 每小时 3 次）。
+
+### 跨源去重（webhook ↔ ntfy ↔ poll）
+
+- \`createListener.respond()\` 是推送源统一入口：先按 \`state.seenNotes / state.seenPipelines\` 去重（与轮询器共享同一份 state），再进 responder——GitLab 重试、socat 重发、轮询兜底撞车都只响应一次。标记先于响应：限流/跳过的决定对该事件是终态。
+- 历史遗留：\`agents.get\` 缺席（离线 mock / 旧宿主）按「线程已不可用」处理，不再 TypeError。
+
+### 服务器部署形态（47.97.44.134，2026-09 起）
+
+- \`dsh-agent-dsh-1\` 容器（**host 网络**）跑 \`dsh --profile bug-triage --port 3080 --no-open\`；DSH_HOME=/data/.dsh ↔ 宿主 /opt/dsh-agent/data/.dsh；GUI 只绑 127.0.0.1:3080（防 RCE，DSH 拒绝 --host 0.0.0.0）。
+- GitLab 同机容器（8880/8443/8822）。入站链：GitLab webhook → \`http://172.17.0.1:9100/gitlab-tools/webhook\`（docker 网桥地址）→ 宿主 socat（\`TCP-LISTEN:9100,bind=172.17.0.1,fork\` → 127.0.0.1:3080，systemd 单元 dsh-gitlab-webhook）→ 插件内建接收器（secret 校验/去重/防环/会话桥接全是插件现成逻辑）。GitLab 侧需允许 webhook 发往本地网络（Admin → Settings → Network → Outbound requests；此前 ntfy-converter 绑 172.17.0.1:17587 已依赖同一放行）。
+- 插件真身放持久卷：宿主 /opt/dsh-agent/data/dsh-gitlab-tools（容器内 /data/dsh-gitlab-tools），profile node_modules 的 symlink 指向它（容器重建不丢）；/opt/dsh-gitlab-tools（容器层）是旧位置，重建即失效。部署 = 本地 rsync lib/ → 卷 → \`docker restart dsh-agent-dsh-1\`。
+- profile-init.sh 每次启动重写 cordis.patch.yml（现含全套 webhook 配置：webhookSecretToken / webhookMentionUsername / webhookPollProjects 兜底轮询 / webhookDefaultCwd=/workspace/repo），entrypoint.sh 再 sed 注入 SA token。轮询器在服务器定位是兜底（间隔放大到 120s）。
+- 本机（Mac）dev 实例继续用 ntfy 推送源 + 轮询收事件；**双机同时开 mention 自动响应会对同一评论双响应**——留给你决定哪台响应（关掉一台的 webhookMentionUsername 即可）。
