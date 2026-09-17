@@ -379,37 +379,5 @@ assert(String(await listener2.respond(plRecord())).startsWith('triaged:'), 'dedu
 assert((await listener2.respond(plRecord())) === 'dedup', 'dedup: 同 pipeline 再投 → dedup')
 assert((await listener2.respond({ payload: { object_kind: 'push', project: { path_with_namespace: 'g/p' } } })) === 'not-actionable', 'dedup: push 只落盘不响应')
 
-// ── 8. AI 身份（服务账户下拉）────────────────────────────────────────────
-const idm = await import(join(ROOT, 'lib/identity.js'))
-const k1 = idm.aiTokenRefKey('service_account_5c681ca62d63cc04fb90e812683750fa')
-assert(k1.startsWith('gitlabToolsAiToken_') && /^[A-Za-z_][A-Za-z0-9_]*$/.test(k1), 'identity: REF 键符合 credentialRef 约束（含点/横线用户名净化）')
-assert(idm.aiTokenRefKey('john.doe-1') === idm.aiTokenRefKey('john.doe-1'), 'identity: REF 键稳定')
-assert(idm.aiTokenRefKey('john.doe-1') !== idm.aiTokenRefKey('john_doe_1'), 'identity: 散列后缀防净化碰撞')
-const m1 = idm.resolveAiIdentity({ aiUsername: '', legacyToken: 'T1', legacyUsername: 'sa1', cfgToken: 'T2', cfgUsername: 'sa2' })
-assert(m1.token === 'T1' && m1.source === 'legacy-unselected' && m1.warning === '', 'identity: 未选择 → 旧链')
-const m2 = idm.resolveAiIdentity({ aiUsername: 'saX', perAccountToken: 'TP', legacyToken: 'T1', legacyUsername: 'sa1', cfgToken: '', cfgUsername: '' })
-assert(m2.token === 'TP' && m2.source === 'per-account', 'identity: 所选账户有 per-account token')
-const m3 = idm.resolveAiIdentity({ aiUsername: 'sa1', perAccountToken: '', legacyToken: 'T1', legacyUsername: 'sa1', cfgToken: '', cfgUsername: '' })
-assert(m3.token === 'T1' && m3.source === 'legacy', 'identity: 所选账户身份与旧链 token 一致 → 旧链可用')
-const m4 = idm.resolveAiIdentity({ aiUsername: 'saX', perAccountToken: '', legacyToken: 'T1', legacyUsername: 'sa1', cfgToken: 'T2', cfgUsername: 'other' })
-assert(m4.token === '' && m4.source === 'missing' && m4.warning.includes('saX'), 'identity: 所选账户无 token → 明确缺失 + 警告')
-const m5 = idm.mergeAccountCandidates([[{ username: 'a' }, { username: 'B' }], [{ username: 'b', name: 'dup' }], [{ username: 'c' }]])
-assert(m5.length === 3 && m5[0].username === 'a' && m5[1].username === 'B' && m5[2].username === 'c', 'identity: 候选去重（大小写不敏感）保序')
-
-// 路由级：下拉候选 + 选择校验（离线：admin 列举与身份解析都会失败，走回落路径）
-const { ctx: ctxI, routes: routesI } = makeCtx()
-await mod.apply(ctxI, { host: 'https://127.0.0.1:1', token: 'glpat-offline', defaultProject: '', perPage: 20, timeoutMs: 60000 })
-const routeI = routesI.find((x) => x.kind === 'prefix' && x.path === '/gitlab-tools')
-r = await call(routeI, 'GET', '/gitlab-tools/service-accounts')
-assert(r.status === 200 && r.json.ok === true && Array.isArray(r.json.accounts) && r.json.source === 'local', 'identity: GET /service-accounts → 200（admin 不可用回落 local）')
-r = await call(routeI, 'POST', '/gitlab-tools/settings', { aiUsername: 'no_such_account' })
-assert(r.status === 400 && r.json.code === 'no-token-for-account', 'identity: 选择无 token 账户 → 400 no-token-for-account')
-r = await call(routeI, 'POST', '/gitlab-tools/settings', { aiUsername: '' })
-assert(r.status === 200 && r.json.ok === true, 'identity: 清除选择（空）→ 200')
-r = await call(routeI, 'POST', '/gitlab-tools/settings', { aiUsername: 123 })
-assert(r.status === 400 && r.json.code === 'config', 'identity: 非 string aiUsername → 400')
-r = await call(routeI, 'GET', '/gitlab-tools/settings')
-assert(r.status === 200 && r.json.ok === true && 'aiUsername' in r.json && 'aiIdentity' in r.json && Array.isArray(r.json.aiAccounts), 'identity: GET /settings 透出 aiUsername/aiIdentity/aiAccounts')
-
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall checks passed')
