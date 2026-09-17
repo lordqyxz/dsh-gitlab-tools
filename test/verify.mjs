@@ -411,5 +411,62 @@ assert(String(await listener2.respond(plRecord())).startsWith('triaged:'), 'dedu
 assert((await listener2.respond(plRecord())) === 'dedup', 'dedup: 同 pipeline 再投 → dedup')
 assert((await listener2.respond({ payload: { object_kind: 'push', project: { path_with_namespace: 'g/p' } } })) === 'not-actionable', 'dedup: push 只落盘不响应')
 
+// ── 8. emoji ACK：👀 开始处理 → ✅ 已回复 / ❌ 失败 ──────────────────────
+const ackMod = await import(join(ROOT, 'lib/ack.js'))
+assert(ackMod.ACK_EYES === 'eyes' && ackMod.ACK_DONE === 'white_check_mark' && ackMod.ACK_FAILED === 'x', 'ack: emoji 名常量')
+const ackCalls = []
+const mkAckClient = () => ({ raw: async ({ path, method, body }) => {
+  ackCalls.push({ path, method, body })
+  if (method === 'POST' && path.includes('/award_emoji')) return { data: { id: 700 + ackCalls.length } }
+  if (method === 'DELETE') return { data: {} }
+  if (method === 'POST' && path.endsWith('/notes')) return { data: { id: 800 + ackCalls.length } }
+  return { data: {} }
+} })
+const ackHelper = ackMod.createAckHelper({ client: mkAckClient })
+const ackState = {}
+const ackStateFile = join(tmpdir(), `gl-ack-${process.pid}-${Date.now()}.json`)
+const ackAgents = { create: mockAgents.create, get: () => ({}) }
+const ackResponder = lst.createResponder({ agents: ackAgents, controller: mockController, store: lstStore, state: ackState, stateFile: ackStateFile, mentionUsername: 'agent-bot', resolveCwd: () => '/ws/existing', ensureWorkspace: (dir) => wsRegistry.resolveByPath(dir).then((w) => w ?? wsRegistry.create(dir)), ack: ackHelper, client: mkAckClient })
+const oAck = await ackResponder.handle({ project: 'g/ack', issue: { iid: 3, title: 't', description: 'd' }, note: { id: 901, body: '@agent-bot 看', author: { username: 'bob' } } })
+const ackSid = agentCreates[agentCreates.length - 1].sessionId
+assert(oAck.startsWith('responded:session-'), 'ack: 注入成功（' + oAck + '）')
+assert(ackCalls.some((c) => c.method === 'POST' && c.path.includes('/issues/3/notes/901/award_emoji') && c.body.name === 'eyes'), 'ack: 会话开始 → 触发 note 贴 👀')
+assert(ackState.acks?.[ackSid] && ackState.acks[ackSid].emoji === 'eyes' && ackState.acks[ackSid].awardId, 'ack: 未决 ACK 落 state')
+// 出站：回复成功 → 👀 换 ✅，ACK 消费清除
+const obAck = ob.createOutbound({ client: mkAckClient, state: ackState, stateFile: ackStateFile, ack: ackHelper })
+const ackSess = { id: ackSid, events: [{ type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: '回复正文' }] } } }] }
+const oDone = await obAck.handleSessionEvent(ackSess, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+assert(oDone.startsWith('posted:note-'), 'ack: 回复贴回（' + oDone + '）')
+assert(ackCalls.some((c) => c.method === 'DELETE' && c.path.includes('/award_emoji/')), 'ack: 撤 👀')
+assert(ackCalls.some((c) => c.method === 'POST' && c.path.includes('/issues/3/notes/901/award_emoji') && c.body.name === 'white_check_mark'), 'ack: 贴 ✅')
+assert(!ackState.acks?.[ackSid], 'ack: 成功后 ACK 消费清除')
+// turn 失败（error）→ ❌ + 兜底短评
+const oAck2 = await ackResponder.handle({ project: 'g/ack', issue: { iid: 4, title: 't', description: 'd' }, note: { id: 902, body: '@agent-bot 再看', author: { username: 'bob' } } })
+const ackSid2 = agentCreates[agentCreates.length - 1].sessionId
+assert(oAck2.startsWith('responded:session-'), 'ack: 第二线程注入（' + oAck2 + '）')
+const callsBeforeFail = ackCalls.length
+const oAckFail = await obAck.handleSessionEvent({ id: ackSid2, events: [] }, { type: 'turn/end', data: { turn: 1, reason: { kind: 'error' } } })
+assert(oAckFail === 'skip-reason:error', 'ack: 失败 turn 走 skip-reason（' + oAckFail + '）')
+assert(ackCalls.slice(callsBeforeFail).some((c) => c.method === 'DELETE'), 'ack: 失败撤 👀')
+assert(ackCalls.slice(callsBeforeFail).some((c) => c.method === 'POST' && c.path.includes('/award_emoji') && c.body.name === 'x'), 'ack: 失败贴 ❌')
+assert(ackCalls.slice(callsBeforeFail).some((c) => c.method === 'POST' && c.path.endsWith('/notes') && String(c.body.body).includes('~~~~') && String(c.body.body).includes('"kind"')), 'ack: 失败评论含 reason 原样（JSON + 围栏）')
+assert(!ackState.acks?.[ackSid2], 'ack: 失败后 ACK 清除')
+// 注入失败（agents.create 抛错）→ 直接 ❌ + 兜底短评（含原因）
+const badAgents = { create: async () => { throw new Error('session header mismatch') } }
+const badResponder = lst.createResponder({ agents: badAgents, controller: mockController, store: lstStore, state: {}, stateFile: ackStateFile, mentionUsername: 'agent-bot', ack: ackHelper })
+const oBad = await badResponder.handle({ project: 'g/ack', issue: { iid: 5, title: 't', description: 'd' }, note: { id: 903, body: '@agent-bot 看', author: { username: 'bob' } } })
+assert(oBad.startsWith('inject-failed:'), 'ack: 注入失败 outcome（' + oBad + '）')
+assert(ackCalls.some((c) => c.method === 'POST' && c.path.includes('/issues/5/notes/903/award_emoji') && c.body.name === 'x'), 'ack: 注入失败直接贴 ❌')
+assert(ackCalls.some((c) => c.method === 'POST' && c.path.endsWith('/notes') && String(c.body.body).includes('session header mismatch')), 'ack: 兜底短评含失败原因')
+// pipeline 分诊：无触发 note → 👀 贴 MR 本身
+const oTri = await ackResponder.handle({ project: 'g/ack', pipeline: { id: 77, ref: 'feature/z', sha: 'abc', status: 'failed' }, merge_request: { iid: 9, title: 'T', source_branch: 'feature/z' }, failedJobs: [] })
+assert(oTri.startsWith('triaged:session-'), 'ack: pipeline 分诊注入（' + oTri + '）')
+assert(ackCalls.some((c) => c.method === 'POST' && c.path.includes('/merge_requests/9/award_emoji') && !c.path.includes('/notes/') && c.body.name === 'eyes'), 'ack: pipeline → MR 本身贴 👀')
+// 追问（同线程续问，无需 @）→ 也贴 👀
+const oCont = await ackResponder.handle({ project: 'g/ack', issue: { iid: 3, title: 't', description: 'd' }, note: { id: 904, body: '追问：进展如何', author: { username: 'bob' } } })
+assert(oCont.startsWith('continued:'), 'ack: 追问注入（' + oCont + '）')
+assert(ackCalls.some((c) => c.method === 'POST' && c.path.includes('/issues/3/notes/904/award_emoji') && c.body.name === 'eyes'), 'ack: 追问也贴 👀')
+
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall checks passed')
