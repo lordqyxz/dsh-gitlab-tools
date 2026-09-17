@@ -533,5 +533,39 @@ assert(whDisc && whDisc.note.discussionId === 'disc-77', 'thread: webhook 归一
 
 
 
+// ── 10. 用量脚注：foldUsage / formatUsageFooter / 出站附加 ───────────────────
+const usg = await import(join(ROOT, 'lib/usage.js'))
+const usev = (turn, u, time, text) => ({ type: 'assistant/message', time, data: { turn, ...(u ? { usage: u } : {}), ...(text ? { message: { content: [{ type: 'text', text }] } } : {}) } })
+const uEvents = [
+  usev(1, { inputTokens: 6000, outputTokens: 1000, reasoningTokens: 500 }, 1000),
+  usev(1, { inputTokens: 4000, outputTokens: 1000 }, 11000),
+  usev(2, { inputTokens: 500, outputTokens: 100 }, 20000),
+]
+const uAll = usg.foldUsage(uEvents)
+assert(uAll.input === 10500 && uAll.output === 2100 && uAll.reasoning === 500 && uAll.cacheRead === 0 && uAll.cacheWrite === 0 && uAll.samples === 3 && uAll.turns === 2, 'usage: 会话级折叠五类字段 + 去重轮数')
+const uT1 = usg.foldUsage(uEvents, { turn: 1 })
+assert(uT1.input === 10000 && uT1.output === 2000 && uT1.reasoning === 500 && uT1.samples === 2 && uT1.turns === 1, 'usage: turn 过滤只折叠该轮')
+assert(usg.formatUsageFooter(uT1, uAll) === '📊 本轮 ↑ 10k · ↓ 2k · 🧠 500 · ⚡ 1200.0 tok/s ｜ 累计 2 轮 · ↑ 10.5k · ↓ 2.1k', 'usage: 脚注固定格式（推理/速度/累计全要）')
+assert(usg.formatUsageFooter(usg.foldUsage([usev(3, { inputTokens: 500, outputTokens: 100 }, 20000)]), uAll) === '📊 本轮 ↑ 500 · ↓ 100 ｜ 累计 2 轮 · ↑ 10.5k · ↓ 2.1k', 'usage: 缺数优雅省略（无推理、单样本无速度）')
+assert(usg.formatUsageFooter({ samples: 0 }, uAll) === '', 'usage: 本轮无样本 → 空脚注')
+assert(usg.formatUsageFooter(uT1, uT1) === '📊 本轮 ↑ 10k · ↓ 2k · 🧠 500 · ⚡ 1200.0 tok/s', 'usage: 累计无新增样本时不重复展示')
+assert(usg.formatUsageFooter(uT1, null) === '📊 本轮 ↑ 10k · ↓ 2k · 🧠 500 · ⚡ 1200.0 tok/s', 'usage: 无会话级数据时只报本轮')
+
+// 出站附加：有 usage → 固定脚注；usageFooter:false → 不加；无 usage 事件 → 不加（第 6 节已覆盖）
+const obUPosts = []
+const obUClient = { raw: async ({ path, method, body }) => { obUPosts.push({ path, method, body }); return { data: { id: 600 + obUPosts.length } } } }
+const obUStateFile = join(tmpdir(), 'gl-ob-u-' + process.pid + '-' + Date.now() + '.json')
+const obUState = { sessionIndex: { 'session-u': { key: 'g/p#5', project: 'g/p', kind: 'issue', iid: 5 } } }
+const obU = ob.createOutbound({ client: async () => obUClient, state: obUState, stateFile: obUStateFile })
+const uSess = mkSess('session-u', [
+  usev(7, { inputTokens: 6000, outputTokens: 1000, reasoningTokens: 500 }, 1000, '带用量的回复'),
+  usev(7, { inputTokens: 4000, outputTokens: 1000 }, 11000),
+])
+const oU = await obU.handleSessionEvent(uSess, { type: 'turn/end', data: { turn: 7, reason: { kind: 'completed' } } })
+assert(oU === 'posted:note-601' && obUPosts[0].body.body === '带用量的回复\n\n---\n\n📊 本轮 ↑ 10k · ↓ 2k · 🧠 500 · ⚡ 1200.0 tok/s', 'usage: 出站回复附加本轮脚注（会话仅本轮，无累计段）')
+const obUOff = ob.createOutbound({ client: async () => obUClient, state: { sessionIndex: { 'session-v': { key: 'g/p#6', project: 'g/p', kind: 'issue', iid: 6 } } }, stateFile: obUStateFile, usageFooter: false })
+const oUOff = await obUOff.handleSessionEvent(mkSess('session-v', [usev(8, { inputTokens: 6000, outputTokens: 1000 }, 1000, '关闭脚注的回复')]), { type: 'turn/end', data: { turn: 8, reason: { kind: 'completed' } } })
+assert(oUOff === 'posted:note-602' && obUPosts[1].body.body === '关闭脚注的回复', 'usage: usageFooter:false → 回复不带脚注')
+
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall checks passed')

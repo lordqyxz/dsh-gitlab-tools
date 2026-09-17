@@ -96,6 +96,7 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 - 宿主 index.js 以官方持久化插件同一惯用法订阅宿主事件：\`ctx.on('session/event', (session, event) => …)\`（agent 子 fiber 产生的会话事件会到达插件 ctx；官方 dsh-session-persistence-jsonl 的 install() 同款用法）。事件交给 \`createOutbound().handleSessionEvent\`。
 - 提交点 = \`turn/end\` 且 \`reason.kind ∈ {completed, max-tokens}\`；最终回复 = 该 turn 最后一条**未中断** assistant/message 的 text 块（\`extractFinalText(session.events, turn)\`；session.events 不可用时退回 assistant/message 到达时写入的内存 stash）。aborted / error / blocked / interrupted 不贴回。
 - 只有**绑定线程**的会话出站：入站响应器创建会话时在 \`state.sessionIndex[sessionId]\` 写 \`{ key, project, kind: 'issue'|'mr', iid }\`；GUI 手开的开发会话不在表内，不受影响。同 (session, turn) 只贴一次（\`state.outbound\` 有界 100 条）。kind=mr → \`/merge_requests/:iid/notes\`，issue → \`/issues/:iid/notes\`；一律 aiToken（SA）身份发布。
+- **用量脚注（2026-09-17，联动 ty/data-flow#368）**：绑定会话的出站回复末尾自动附固定格式 token 脚注：`📊 本轮 ↑ 10k · ↓ 2k · 🧠 500 · ⚡ 1200.0 tok/s ｜ 累计 2 轮 · ↑ 10.5k · ↓ 2.1k`（↑/↓ 必有，🧠 推理 >0 才显示，⚡ 需 ≥2 样本，累计仅当会话有本轮之外样本；缓存 token 不进脚注——每轮重复读上下文会显得用量爆炸，五类全量走 /session/stats）。数据源 = 会话事件流 `assistant/message.usage`（reported 级）；折叠统一走 lib/usage.js（foldUsage / formatUsageFooter），/session/stats 路由同口径（脚注数字 = 面板数字）；事件日志不可用（stash 兜底路径）不加——宁缺勿造，不伪装精确值。config `agentUsageFooter`（默认开）。测试：verify.mjs 第 10 节。
 - \`handleSessionEvent\` 绝不 throw（失败返回 \`post-failed:*\` 字符串）——事件监听器不能破坏会话 loop。
 - 模型已被明确告知（三份提示词的「回复通道」段 + \`gitlab_create_note\` 工具描述）：最终回复由系统自动贴回、不要自己调用 gitlab_create_note 发回复、人类后续评论会自动送进会话。
 
