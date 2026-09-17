@@ -13,6 +13,7 @@ import { IssueDetailView } from "./issue-detail";
 import { IssueFilter } from "./issue-filter";
 import { DevNoticePanel } from "./dev-notice";
 import { SettingsCard } from "./settings";
+import { AgentEventsView } from "./agent-events";
 import type { DevNotice, Issue } from "./types";
 
 /** Plugin-local settings blob declared via TAB_DESCRIPTOR.settings.pluginToggles. */
@@ -63,6 +64,7 @@ export function GitLabIssuesTab({ ctx, store, scope, visible }: {
   const [selected, setSelected] = useState<{ project: string; iid: number } | null>(null);
   const [runningById, setRunningById] = useState<Record<string, boolean>>({});
   const [showSettings, setShowSettings] = useState(false);
+  const [showEvents, setShowEvents] = useState(false);
   const project = state.data?.ok ? state.data.project : settings?.defaultProject;
   const count = state.data?.ok ? (state.data.issues ?? []).length : 0;
 
@@ -139,9 +141,9 @@ export function GitLabIssuesTab({ ctx, store, scope, visible }: {
           <IssueMark size={14} />
         </span>
         <span style={{ fontSize: "12.5px", fontWeight: 600, lineHeight: "18px", color: C.label1 }}>
-          {showSettings ? "GitLab Issues · 设置" : "GitLab Issues"}
+          {showSettings ? "GitLab Issues · 设置" : showEvents ? "GitLab Issues · 事件" : "GitLab Issues"}
         </span>
-        {!showSettings && (
+        {!showSettings && !showEvents && (
           <span style={{ fontSize: "11px", color: C.label3, fontVariantNumeric: "tabular-nums" }}>
             {state.loading ? "刷新中…" : count}
           </span>
@@ -150,18 +152,30 @@ export function GitLabIssuesTab({ ctx, store, scope, visible }: {
         <button
           type="button"
           title={showSettings ? "返回列表" : "功能设置"}
-          onClick={() => setShowSettings((v) => !v)}
+          onClick={() => { setShowSettings((v) => !v); setShowEvents(false); }}
           style={iconBtnStyle}
         >
           {showSettings ? "←" : "⚙"}
         </button>
         {!showSettings && (
+          <button
+            type="button"
+            title={showEvents ? "返回列表" : "Agent 事件"}
+            onClick={() => { setShowEvents((v) => !v); setShowSettings(false); }}
+            style={iconBtnStyle}
+          >
+            {showEvents ? "←" : "⚡"}
+          </button>
+        )}
+        {!showSettings && !showEvents && (
           <button type="button" title="立即刷新" onClick={() => loadIssues()} style={iconBtnStyle}>⟳</button>
         )}
       </div>
 
       {showSettings ? (
         <SettingsCard />
+      ) : showEvents ? (
+        <AgentEventsView />
       ) : (
         <>
           {notice ? (

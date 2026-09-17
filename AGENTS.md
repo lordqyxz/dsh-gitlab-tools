@@ -121,3 +121,10 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 - 服务器 profile 改名 bug-triage → gitlab-agent：profile-init.sh / entrypoint.sh 内全部路径与 --profile 参数同步；旧 profile 目录移到 /data/.dsh/profiles/bug-triage.bak-*；sessions 与 settings.yaml 是 DSH_HOME 级，改名不受影响。systemd 单元 dsh-gitlab-webhook → gitlab-agent-webhook。
 - SA token 存储定稿：docker volume 文件 /data/dsh-gitlab-tools/.sa-token（600），entrypoint 文件优先、GITLAB_TOKEN env 回退；轮换 = 改文件 + docker restart。曾用 GITLAB_TOKEN env 被吊销引发 entrypoint git fetch 失败 → set -e 崩溃循环（叠加 settings.yaml 半删除损坏，二次崩溃），修复过程见 git 历史。
 - 崩溃循环排障入口：docker ps -a 看 RestartCount；docker logs 看 entrypoint 哪一步失败（git fetch 失败 = token 问题；settings section must be an object = settings.yaml 用户层结构损坏，整段移除受损命名空间）。
+
+## 17. Agent 事件视图 + UI 原语层（2026-09-17）
+
+- 诊断面从工具升级为视图：gitlab_agent_events 工具已移除；数据改经 GET /gitlab-tools/agent-events（limit/kind/project 参数，返回 status 块 + 事件流水）与 POST /gitlab-tools/agent-poll（手动触发一轮轮询，未启用时 enabled=false）两个路由，供内嵌视图消费。gitlab_agent_poll_now 工具保留（模型可主动触发轮询）。
+- 视图内嵌在 GitLab Issues 标签（tab.tsx）：标签头 ⚡ 按钮切换 列表/事件 两个视图（与 ⚙ 设置互斥，← 返回）；组件 src/client/agent-events.tsx（AgentEventsView），非独立 better-sidebar 标签。
+- **UI 原语层 src/client/ui.tsx**（shadcn/ui 思路的本地化）：Badge / Btn（带 active、disabled 态）/ StatusCard / StatusRow / Row / MetaLine / Hint。**不直接引入 shadcn/ui**：其组件绑定 Tailwind 类名体系，需要 Tailwind 构建管线并把生成的全局 CSS 注入宿主页面（无法 scoped，会与宿主 design-platform 样式互相污染）；Radix 的 portal/z-index 与本 GUI overlay 体系有冲突风险。原语样式一律走 --dsw-alias-* token（沿第 8 条规则）。新视图一律优先用这层原语，旧视图（issue-card/note-row 等）可渐进迁移。
+- AI 身份诊断：agent-events 路由返回 status.aiIdentity（=aiToken 经 GET /user 解析的账户名，index.js resolveAiUsername，按 token 记忆化）+ aiIdentitySource。此前随身份下拉 revert 掉的 getAiIdentity 不再存在，勿在路由里引用。

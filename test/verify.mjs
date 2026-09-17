@@ -238,11 +238,13 @@ assert(wr.status === 200 && wr.json.dedup === true, 'webhook: 同 uuid 重发 �
 const noteBody = { object_kind: 'note', user: { username: 'bob' }, issue: { iid: 12, title: '登录页崩溃' }, object_attributes: { note: '@agent-bot 看一下' }, project: { id: 7, path_with_namespace: 'group/demo' } }
 wr = await call(wroute, 'POST', '/gitlab-tools/webhook', noteBody, { 'x-gitlab-token': 'whsec-1', 'x-gitlab-webhook-uuid': 'u-2' })
 assert(wr.status === 200, 'webhook: note 事件 → 200')
-const evTool = wtools.find((t) => t.name === 'gitlab_agent_events')
-assert(Boolean(evTool), 'webhook: 注册 gitlab_agent_events 工具')
-const evOut = await evTool.execute({ detail: false })
-assert(evOut.text.includes('接收器状态') && evOut.text.includes('bob 评论 issue #12'), 'webhook: 查询工具输出状态+note 摘要')
-assert(Array.isArray(evOut.json.events) && evOut.json.events.length === 2, 'webhook: 查询工具 json.events')
+assert(!wtools.some((t) => t.name === 'gitlab_agent_events'), 'webhook: 诊断工具已移除（升级为侧边栏面板）')
+const aer = await call(wroute, 'GET', '/gitlab-tools/agent-events?limit=10')
+assert(aer.status === 200 && aer.json.ok === true && aer.json.status.receiver === 'on' && Array.isArray(aer.json.events), 'webhook: GET /agent-events → 状态+流水')
+const aeNote = aer.json.events.find((e) => e.kind === 'note' && String(e.brief).includes('bob 评论'))
+assert(aeNote && aeNote.responder === 'responder-disabled', 'webhook: 面板流水含 note 摘要与处置结果')
+const app = await call(wroute, 'POST', '/gitlab-tools/agent-poll')
+assert(app.status === 200 && app.json.ok === true && app.json.enabled === false, 'webhook: POST /agent-poll（轮询未启用 → enabled=false）')
 
 // 未启用实例：路由 404 webhook-disabled，工具报未启用
 const { ctx: dctx, routes: droutes, tools: dtools } = makeCtx()
@@ -250,9 +252,8 @@ await mod.apply(dctx, { host: 'https://gl.example.com', token: 'glpat-x', timeou
 const droute = droutes.find((r) => r.kind === 'prefix' && r.path === '/gitlab-tools')
 const dr = await call(droute, 'POST', '/gitlab-tools/webhook', pushBody)
 assert(dr.status === 404 && dr.json.code === 'webhook-disabled', 'webhook: 未启用 → 404 webhook-disabled')
-const dTool = dtools.find((t) => t.name === 'gitlab_agent_events')
-const dOut = await dTool.execute({})
-assert(dOut.text.includes('webhook=off') && dOut.text.includes('轮询=off'), 'webhook: 未启用时查询工具如实报告（webhook=off）')
+const der = await call(droute, 'GET', '/gitlab-tools/agent-events')
+assert(der.status === 200 && der.json.ok === true && der.json.status.receiver === 'off' && der.json.status.responder && der.json.status.responder.enabled === false, 'webhook: 未启用实例 → 面板如实报告（receiver=off / responder off）')
 
 // ── 5. listener：响应器 + 轮询器（离线单测，不碰定时器）───────────────────
 const lst = await import(join(ROOT, 'lib/listener.js'))

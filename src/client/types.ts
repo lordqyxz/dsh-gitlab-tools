@@ -59,6 +59,65 @@ export type SettingsResp = {
   message?: string;
 };
 
+/** One ingested agent-event row (GET /gitlab-tools/agent-events). */
+export type AgentEventRow = {
+  receivedAt: string;
+  source: string;
+  kind: string;
+  brief: string;
+  responder?: string | null;
+  project?: string;
+  skipped?: boolean;
+};
+
+/** Event-pipeline status block for the Agent 事件 panel. */
+export type AgentEventsStatus = {
+  receiver: "on" | "off";
+  poller: {
+    enabled: boolean;
+    projects: string[];
+    intervalMs: number;
+    lastPollAt: string | null;
+    lastCycle: { at: string; notes: number; errors: string[] } | null;
+    lastCycleError: string | null;
+  } | null;
+  ntfy: { enabled: boolean; url: string; messages: number; lastError: string | null } | null;
+  responder: {
+    enabled: boolean;
+    mentionUsername?: string;
+    maxPerIssuePerHour?: number;
+    maxContinuationsPerHour?: number;
+    pipelineTriage?: boolean;
+  } | null;
+  outbound: {
+    boundSessions: number;
+    postedCount: number;
+    lastPostedAt: string | null;
+    lastTarget: string | null;
+    lastError: string | null;
+  } | null;
+  aiIdentity: string;
+  aiIdentitySource?: string;
+  aiIdentityWarning?: string;
+};
+
+export type AgentEventsResp = {
+  ok: boolean;
+  status?: AgentEventsStatus;
+  total?: number;
+  events?: AgentEventRow[];
+  code?: string;
+  message?: string;
+};
+
+export type AgentPollResp = {
+  ok: boolean;
+  enabled?: boolean;
+  notes?: number;
+  errors?: string[];
+  message?: string;
+};
+
 /** List filters for the issues panel (mirrors GitLab's issue search). */
 export type PanelFilters = {
   /** Full-text search on title/description (server-side). */
