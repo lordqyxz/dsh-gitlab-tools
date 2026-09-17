@@ -2,6 +2,8 @@
 
 DSH（DeepSeek Harness）插件：把 GitLab 能力以 agent 工具形式注入 DSH。**不是**把 `glab` CLI 包一层，而是从 GitLab 自身的 OpenAPI spec 生成类型化 SDK 作为执行底座——SDK 与实例版本对齐，不依赖命令行子进程。除工具外，浏览器半区还提供一个**侧边栏 GitLab Issues 标签**（dsh-better-sidebar，与 终端/任务 等平级）+ 设置页。
 
+除工具与侧边栏外，插件还承担 **GitLab Agent** 角色：监听 GitLab 事件（webhook 推送 / ntfy 推送 / 轮询三种事件来源），@mention 自动创建会话并响应，最终回复自动贴回 issue/MR 评论，MR 流水线失败自动分诊（机制与配置详见 `AGENTS.md`）。
+
 ## 架构
 
 ```

@@ -6,6 +6,8 @@
 
 DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 GitLab OpenAPI spec 生成的 SDK**（`lib/generated/gitlabApi.mjs`），不是 CLI 包装。
 
+**术语约定（2026-09）**：本插件的「事件监听 + 自动响应」能力整体称 **GitLab Agent**——GitLab 侧事件（note / issue / MR / pipeline）进入，agent 会话处理后把回复贴回 issue/MR 评论。webhook / ntfy / 轮询只是三种**事件来源**（机制名，不作为组件名）；描述整条链路时不写「xx dsh webhook」这类说法。服务器实例的 profile 名 `bug-triage` 是历史命名，仅指 DSH 实例本身，不是能力名（见「服务器部署形态」）。
+
 ## 关键决策与坑（务必读）
 
 1. **为什么生成 SDK 而不是包 CLI / 用 @gitbeaker**
@@ -105,8 +107,9 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 
 ### 服务器部署形态（47.97.44.134，2026-09 起）
 
-- \`dsh-agent-dsh-1\` 容器（**host 网络**）跑 \`dsh --profile bug-triage --port 3080 --no-open\`；DSH_HOME=/data/.dsh ↔ 宿主 /opt/dsh-agent/data/.dsh；GUI 只绑 127.0.0.1:3080（防 RCE，DSH 拒绝 --host 0.0.0.0）。
+- \`dsh-agent-dsh-1\` 容器（**host 网络**）跑 \`dsh --profile bug-triage --port 3080 --no-open\`（profile 名为历史命名，能力本体是 GitLab Agent，见顶部术语约定）；DSH_HOME=/data/.dsh ↔ 宿主 /opt/dsh-agent/data/.dsh；GUI 只绑 127.0.0.1:3080（防 RCE，DSH 拒绝 --host 0.0.0.0）。
 - GitLab 同机容器（8880/8443/8822）。入站链：GitLab webhook → \`http://172.17.0.1:9100/gitlab-tools/webhook\`（docker 网桥地址）→ 宿主 socat（\`TCP-LISTEN:9100,bind=172.17.0.1,fork\` → 127.0.0.1:3080，systemd 单元 dsh-gitlab-webhook）→ 插件内建接收器（secret 校验/去重/防环/会话桥接全是插件现成逻辑）。GitLab 侧需允许 webhook 发往本地网络（Admin → Settings → Network → Outbound requests；此前 ntfy-converter 绑 172.17.0.1:17587 已依赖同一放行）。
 - 插件真身放持久卷：宿主 /opt/dsh-agent/data/dsh-gitlab-tools（容器内 /data/dsh-gitlab-tools），profile node_modules 的 symlink 指向它（容器重建不丢）；/opt/dsh-gitlab-tools（容器层）是旧位置，重建即失效。部署 = 本地 rsync lib/ → 卷 → \`docker restart dsh-agent-dsh-1\`。
 - profile-init.sh 每次启动重写 cordis.patch.yml（现含全套 webhook 配置：webhookSecretToken / webhookMentionUsername / webhookPollProjects 兜底轮询 / webhookDefaultCwd=/workspace/repo），entrypoint.sh 再 sed 注入 SA token。轮询器在服务器定位是兜底（间隔放大到 120s）。
+- **AI 身份分配（2026-09-17）**：服务器 bug-triage = dev-agent（id 46），本地 Mac = DeepSeek Harness SA（id 42）——身份由各客户端的 aiToken 决定，两台各自只响应 @ 自己账户的评论（互不触发、无双响应）。SA token 存 volume 文件 /data/dsh-gitlab-tools/.sa-token（600），entrypoint.sh 文件优先、GITLAB_TOKEN env（.env）回退；轮换 = 改 volume 文件 + docker restart，无需重建容器。签发走 admin impersonation API（POST /users/:id/impersonation_tokens，service_accounts 专属签发端点在本实例 404），两把 token 均 api scope、2027-09-17 到期。注意：改 webhookMentionUsername 必须与该台 aiToken 的账户一致（防环与触发同源）。AI 身份下拉功能曾实现后整体 revert（5728650）——身份由 token 决定，下拉属过度设计。
 - 本机（Mac）dev 实例继续用 ntfy 推送源 + 轮询收事件；**双机同时开 mention 自动响应会对同一评论双响应**——留给你决定哪台响应（关掉一台的 webhookMentionUsername 即可）。

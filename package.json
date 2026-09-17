@@ -1,6 +1,6 @@
 {
   "name": "dsh-gitlab-tools",
-  "description": "GitLab 工具插件：从 GitLab OpenAPI spec 生成的类型化 SDK（版本对齐 19.x），向 DSH agent 暴露项目/issue/MR/pipeline 工具，含 gitlab_api 全量通用工具；客户端半区提供右侧悬浮 issue 面板 + 设置页",
+  "description": "GitLab Agent 插件：从 GitLab OpenAPI spec 生成的类型化 SDK（版本对齐 19.x），向 DSH agent 暴露项目/issue/MR/pipeline 工具（含 gitlab_api 全量通用工具）；事件监听 + @mention 自动响应（webhook/ntfy/轮询三种事件来源，回复贴回 issue/MR 评论）；客户端半区提供右侧悬浮 issue 面板 + 设置页",
   "version": "0.1.0",
   "private": true,
   "type": "module",
