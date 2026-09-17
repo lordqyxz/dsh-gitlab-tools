@@ -123,6 +123,23 @@ assert(r.status === 400 && r.json.code === 'config', 'POST /settings → rejects
 r = await call(route, 'POST', '/gitlab-tools/settings', { aiToken: '' })
 assert(r.status === 200 && r.json.ok === true, 'POST /settings → clear aiToken')
 assert(!creds.has('gitlabToolsAiToken'), '清除 aiToken → 从 credentials 移除')
+// 会话恢复/续跑路由（POST /gitlab-tools/session/prompt）
+r = await call(route, 'POST', '/gitlab-tools/session/prompt')
+assert(r.status === 200 && r.json.ok === false && r.json.code === 'params' && /sessionId/.test(r.json.message), 'prompt: 缺 sessionId 拒绝')
+r = await call(route, 'POST', '/gitlab-tools/session/prompt?sessionId=s1')
+assert(r.status === 200 && r.json.ok === false && r.json.code === 'params' && /text/.test(r.json.message), 'prompt: 缺 text 拒绝')
+r = await call(route, 'POST', '/gitlab-tools/session/prompt?sessionId=s1&text=go')
+assert(r.status === 200 && r.json.ok === false && r.json.code === 'no-session-controller', 'prompt: 无 sessionController 降级报错')
+{
+  const prompts = []
+  const second = makeCtx()
+  second.ctx.get = (k) => (k === 'sessionController' ? { prompt: async (p) => { prompts.push(p) } } : undefined)
+  await mod.apply(second.ctx, { host: 'https://gl.example.com', token: 'glpat-x', defaultProject: '', perPage: 20, timeoutMs: 60000 })
+  const route2 = second.routes.find((x) => x.kind === 'prefix' && x.path === '/gitlab-tools')
+  const rr = await call(route2, 'POST', '/gitlab-tools/session/prompt?sessionId=session-abc&text=%E7%BB%A7%E7%BB%AD')
+  assert(rr.status === 200 && rr.json.ok === true && rr.json.queued === true && rr.json.sessionId === 'session-abc', 'prompt: 注入成功 queued=true')
+  assert(prompts.length === 1 && prompts[0].sessionId === 'session-abc' && prompts[0].mode === 'queue' && prompts[0].content[0].text === '继续', 'prompt: 走 sessionController.prompt（queue + 文本透传）')
+}
 
 r = await call(route, 'POST', '/gitlab-tools/settings', { defaultProject: 'group/proj', refreshMs: 300000 })
 assert(r.status === 200 && r.json.ok === true && r.json.defaultProject === 'group/proj', 'POST /settings → persists defaultProject')
