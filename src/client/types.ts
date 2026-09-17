@@ -52,11 +52,26 @@ export type SettingsResp = {
   host?: string;
   refreshMs?: number;
   projectDirs?: ProjectDir[];
+  aiUsername?: string;
+  aiAccounts?: string[];
+  aiIdentity?: string;
+  aiIdentitySource?: string;
+  aiIdentityWarning?: string;
+  aiIdentityNotice?: string;
   configured?: boolean;
   tokenConfigured?: boolean;
   aiTokenConfigured?: boolean;
   code?: string;
   message?: string;
+};
+
+/** AI 身份下拉候选（/gitlab-tools/service-accounts 的条目）。 */
+export type ServiceAccount = {
+  username: string;
+  name?: string;
+  id?: number | null;
+  source?: string;
+  hasToken?: boolean;
 };
 
 /** List filters for the issues panel (mirrors GitLab's issue search). */

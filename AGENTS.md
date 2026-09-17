@@ -110,3 +110,14 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 - 插件真身放持久卷：宿主 /opt/dsh-agent/data/dsh-gitlab-tools（容器内 /data/dsh-gitlab-tools），profile node_modules 的 symlink 指向它（容器重建不丢）；/opt/dsh-gitlab-tools（容器层）是旧位置，重建即失效。部署 = 本地 rsync lib/ → 卷 → \`docker restart dsh-agent-dsh-1\`。
 - profile-init.sh 每次启动重写 cordis.patch.yml（现含全套 webhook 配置：webhookSecretToken / webhookMentionUsername / webhookPollProjects 兜底轮询 / webhookDefaultCwd=/workspace/repo），entrypoint.sh 再 sed 注入 SA token。轮询器在服务器定位是兜底（间隔放大到 120s）。
 - 本机（Mac）dev 实例继续用 ntfy 推送源 + 轮询收事件；**双机同时开 mention 自动响应会对同一评论双响应**——留给你决定哪台响应（关掉一台的 webhookMentionUsername 即可）。
+
+## 16. AI 身份下拉（每客户端选择服务账户，2026-09-17）
+
+- 需求来源：冒烟实测发现服务器与本地 Mac 会**各自**以同一 SA 身份响应（双机双响应已用 webhookMentionUsername 置空解决），进一步要求「不同客户端能选择自己对应的服务账户」。
+- 数据模型：AI 身份 = (username, token) 对，**token 按账户分存**——credential REF 由 \`aiTokenRefKey(username)\`（lib/identity.js）派生：\`gitlabToolsAiToken_<净化用户名>_<base36散列>\`（credential REF 只允许 [A-Za-z_][A-Za-z0-9_]*，GitLab 用户名可含 . 和 -，必须净化 + 散列防碰撞）。legacy REF（gitlabToolsAiToken）与 patch 的 cfg.aiToken 保留为旧链兜底。
+- 设置命名空间新增：\`aiUsername\`（当前选择，'' = 跟随 AI token 本尊）与 \`aiAccounts\`（本机存过 token 的账户记忆，由保存流程维护、不直接可写）。
+- 运行时解析（index.js getAiIdentity，决策矩阵在 identity.js resolveAiIdentity）：所选账户的 per-account REF → legacy REF（仅当其身份经 GET /user 验证与所选一致）→ cfg.aiToken（同上验证）→ 都没有 = 明确 missing：工具回落主 token 并在 GET /settings 的 aiIdentityWarning、gitlab_webhook_events 的 head（AI身份=…）里高亮。不会静默用错身份。
+- 保存校验（POST /gitlab-tools/settings）：带 aiToken 时实时 GET /user 解析归属——与所选 aiUsername 不一致 → 400 ai-username-mismatch；一致 → 存 per-account REF 并自动采用该账户；解析失败（离线）→ 存 legacy REF + aiIdentityNotice 提示未验证。仅切选择不带 token：per-account 或旧链身份验证通过才允许，否则 400 no-token-for-account（提示先填该账户 PAT）。清除 aiToken 会同时清当前所选的 per-account token 并解除选择。
+- 下拉候选（GET /gitlab-tools/service-accounts）：admin 主 token 时用 GET /service_accounts 全量列举（source=admin）；否则回落 local——本机 aiAccounts + 当前生效身份 + 主 token 自身。每项带 hasToken 标记（缺 token 的账户在下拉里标注）。
+- 客户端（settings.tsx）：「AI 身份（服务账户）」下拉 + 刷新按钮 + 当前生效身份行；保存透传 aiUsername。离线冒烟：test/verify.mjs 第 8 节（REF 键约束/防碰撞、决策矩阵、路由校验）。
+- 两台机器的现状：本地选择前 token 在 legacy REF（gitlabToolsAiToken），下拉选 SA 时经旧链身份验证通过即可绑定；服务器 patch aiToken=SA token，同理。若要某台换用别的服务账户：在该台设置页填那个账户的 PAT（自动按账户入库存放）→ 下拉选择 → 保存。

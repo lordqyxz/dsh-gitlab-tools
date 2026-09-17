@@ -6,7 +6,7 @@ import { IssueMark } from "./icons";
 import { refreshSignal } from "./state";
 import { TokenField } from "./token-fields";
 import { C, ghostBtnStyle, inputStyle } from "./theme";
-import type { ProjectDir, SettingsResp } from "./types";
+import type { ProjectDir, ServiceAccount, SettingsResp } from "./types";
 
 type SettingsCfg = {
   defaultProject: string;
@@ -17,6 +17,7 @@ type SettingsCfg = {
   clearAiToken: boolean;
   refreshMs: number;
   projectDirs: ProjectDir[];
+  aiUsername: string;
 };
 
 type TestResult = { ok: boolean; text: string } | null;
@@ -31,6 +32,7 @@ export function SettingsCard() {
     clearAiToken: false,
     refreshMs: 120000,
     projectDirs: [],
+    aiUsername: "",
   });
   const [status, setStatus] = useState<{
     loading: boolean;
@@ -39,6 +41,10 @@ export function SettingsCard() {
     configured: boolean;
     tokenConfigured: boolean;
     aiTokenConfigured: boolean;
+    aiIdentity: string;
+    aiIdentityWarning: string;
+    accounts: ServiceAccount[];
+    accountsLoading: boolean;
     test: TestResult;
   }>({
     loading: true,
@@ -47,6 +53,10 @@ export function SettingsCard() {
     configured: false,
     tokenConfigured: false,
     aiTokenConfigured: false,
+    aiIdentity: "",
+    aiIdentityWarning: "",
+    accounts: [],
+    accountsLoading: false,
     test: null,
   });
 
@@ -68,11 +78,14 @@ export function SettingsCard() {
             host: json.host ?? prev.host,
             refreshMs: json.refreshMs ?? prev.refreshMs,
             projectDirs: Array.isArray(json.projectDirs) ? json.projectDirs : prev.projectDirs,
+            aiUsername: json.aiUsername ?? prev.aiUsername,
           }));
           setStatus((prev) => ({
             ...prev,
             tokenConfigured: json.tokenConfigured === true,
             aiTokenConfigured: json.aiTokenConfigured === true,
+            aiIdentity: json.aiIdentity || "",
+            aiIdentityWarning: json.aiIdentityWarning || "",
           }));
         }
       })
@@ -81,9 +94,24 @@ export function SettingsCard() {
       });
   }, []);
 
+  const loadAccounts = useCallback(() => {
+    setStatus((prev) => ({ ...prev, accountsLoading: true }));
+    fetch("/gitlab-tools/service-accounts", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        setStatus((prev) => ({
+          ...prev,
+          accountsLoading: false,
+          accounts: json && json.ok === true && Array.isArray(json.accounts) ? json.accounts : [],
+        }));
+      })
+      .catch(() => setStatus((prev) => ({ ...prev, accountsLoading: false })));
+  }, []);
+
   useEffect(() => {
     load();
-  }, [load]);
+    loadAccounts();
+  }, [load, loadAccounts]);
 
   const onSave = () => {
     setStatus((prev) => ({ ...prev, saving: true, msg: null }));
@@ -101,6 +129,7 @@ export function SettingsCard() {
       payload.token = (cfg.token || "").trim(); // 覆盖为新 token
     }
     // 否则（空且未勾选清除）→ 不传 token，保持不变
+    payload.aiUsername = (cfg.aiUsername || "").trim();
     if (cfg.clearAiToken) {
       payload.aiToken = ""; // 清除 AI 专属 token，回落 profile patch config
     } else if ((cfg.aiToken || "").trim()) {
@@ -193,11 +222,44 @@ export function SettingsCard() {
         onClearChange={(c) => setCfg((prev) => ({ ...prev, clearToken: c }))}
       />
 
+      <label style={{ display: "flex", flexDirection: "column", gap: "4px", fontSize: "11px", lineHeight: "16px", color: C.label2 }}>
+        <span>AI 身份（服务账户）——本客户端以哪个账户的身份发言/响应（agent 工具与自动贴回都用它）</span>
+        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+          <select
+            value={cfg.aiUsername}
+            onChange={(e) => setCfg((prev) => ({ ...prev, aiUsername: e.target.value }))}
+            style={{ ...inputStyle, flex: "1 1 auto", minWidth: 0 }}
+          >
+            <option value="">未选择（跟随 AI 专属 token 本身）</option>
+            {status.accounts.map((a) => (
+              <option key={a.username} value={a.username}>
+                {"@" + a.username + (a.name ? " · " + a.name : "") + (a.hasToken ? "" : "（缺 token）")}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            title="刷新账户列表"
+            aria-label="刷新账户列表"
+            onClick={loadAccounts}
+            disabled={status.accountsLoading}
+            style={{ ...ghostBtnStyle, background: "transparent", color: C.label2, flex: "none" }}
+          >
+            {status.accountsLoading ? "…" : "刷新"}
+          </button>
+        </div>
+        <span style={{ fontSize: "10.5px", lineHeight: "15px", color: status.aiIdentityWarning ? C.err : C.caption }}>
+          {status.aiIdentity
+            ? "当前生效身份：@" + status.aiIdentity + (status.aiIdentityWarning ? "　⚠ " + status.aiIdentityWarning : "")
+            : "尚未选择身份；选择前请先为对应账户保存 token。列表为空时点「刷新」或先填入服务账户的 token。"}
+        </span>
+      </label>
+
       <TokenField
         title={
           <>
-            AI 专属 token（DeepSeek Harness 身份，可选）—— agent 工具（含 gitlab_create_note）用它发布，
-            与你的身份区分；需使用为 AI 建的 Service Account 的 PAT（scope 至少 api）
+            AI 专属 token（DeepSeek Harness 身份）—— 保存时校验归属并绑定到对应账户；
+            agent 工具（含 gitlab_create_note）与自动贴回都用它，与你的身份区分（scope 至少 api）
           </>
         }
         value={cfg.aiToken}
