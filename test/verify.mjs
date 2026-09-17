@@ -133,13 +133,13 @@ assert(r.status === 200 && r.json.ok === false && r.json.code === 'no-session-co
 {
   const prompts = []
   const second = makeCtx()
-  second.ctx.get = (k) => (k === 'sessionController' ? { prompt: async (p) => { prompts.push(p) } } : undefined)
+  second.ctx.get = (k) => (k === 'sessionController' ? { prompt: async (p, s) => { prompts.push({ p, s }) } } : undefined)
   await mod.apply(second.ctx, { host: 'https://gl.example.com', token: 'glpat-x', defaultProject: '', perPage: 20, timeoutMs: 60000 })
   const route2 = second.routes.find((x) => x.kind === 'prefix' && x.path === '/gitlab-tools')
   const rr = await call(route2, 'POST', '/gitlab-tools/session/prompt?sessionId=session-abc&text=%E7%BB%A7%E7%BB%AD')
   assert(rr.status === 200 && rr.json.ok === true && rr.json.queued === true && rr.json.sessionId === 'session-abc', 'prompt: 注入成功 queued=true')
-  assert(prompts.length === 1 && prompts[0].sessionId === 'session-abc' && prompts[0].mode === 'queue' && prompts[0].content[0].text === '继续', 'prompt: 走 sessionController.prompt（queue + 文本透传）')
-  assert(prompts[0].signal instanceof AbortSignal, 'prompt: 请求自带 abort signal（网关惯用形状）')
+  assert(prompts[0].p.sessionId === 'session-abc' && prompts[0].p.mode === 'queue' && prompts[0].p.content[0].text === '继续', 'prompt: 走 sessionController.prompt（queue + 文本透传）')
+  assert(prompts[0].s instanceof AbortSignal, 'prompt: signal 为第二位置参数（网关形状）')
 }
 
 r = await call(route, 'POST', '/gitlab-tools/settings', { defaultProject: 'group/proj', refreshMs: 300000 })
