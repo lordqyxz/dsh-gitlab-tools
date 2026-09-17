@@ -467,6 +467,65 @@ const oCont = await ackResponder.handle({ project: 'g/ack', issue: { iid: 3, tit
 assert(oCont.startsWith('continued:'), 'ack: 追问注入（' + oCont + '）')
 assert(ackCalls.some((c) => c.method === 'POST' && c.path.includes('/issues/3/notes/904/award_emoji') && c.body.name === 'eyes'), 'ack: 追问也贴 👀')
 
+// ── 9. 线程回复：回复与触发评论同 discussion thread ─────────────────────
+const thCalls = []
+const mkThClient = () => ({ raw: async ({ path, method, body }) => {
+  thCalls.push({ path, method, body })
+  if (method === 'POST' && path.includes('/award_emoji')) return { data: { id: 900 + thCalls.length } }
+  if (method === 'DELETE') return { data: {} }
+  if (method === 'GET' && path.includes('/discussions')) return { data: [{ id: 'disc-9', notes: [{ id: 911 }] }] }
+  if (method === 'POST' && path.includes('/discussions/')) return { data: { id: 970 } }
+  if (method === 'POST' && path.endsWith('/notes')) return { data: { id: 980 } }
+  return { data: {} }
+} })
+const thHelper = ackMod.createAckHelper({ client: mkThClient })
+const thReply = ackMod.createReplyPoster({ client: mkThClient })
+const thState = {}
+const thStateFile = join(tmpdir(), `gl-th-${process.pid}-${Date.now()}.json`)
+const thAgents = { create: mockAgents.create, get: () => ({}) }
+const thResponder = lst.createResponder({ agents: thAgents, controller: mockController, store: lstStore, state: thState, stateFile: thStateFile, mentionUsername: 'agent-bot', ack: thHelper, reply: thReply })
+// webhook 带 discussion_id → 出站回复 POST discussions/:id/notes
+const oTh = await thResponder.handle({ project: 'g/th', issue: { iid: 7, title: 't', description: 'd' }, note: { id: 910, discussionId: 'disc-webhook', body: '@agent-bot 看', author: { username: 'bob' } } })
+const thSid = agentCreates[agentCreates.length - 1].sessionId
+assert(oTh.startsWith('responded:session-'), 'thread: 注入成功（' + oTh + '）')
+assert(thState.sessionIndex?.[thSid]?.discussionId === 'disc-webhook' && thState.sessionIndex?.[thSid]?.noteId === 910, 'thread: sessionIndex 记录 noteId/discussionId')
+const obTh = ob.createOutbound({ client: mkThClient, state: thState, stateFile: thStateFile, ack: thHelper, reply: thReply })
+const thSess = { id: thSid, events: [{ type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: '线程内回复' }] } } }] }
+const oThDone = await obTh.handleSessionEvent(thSess, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+assert(oThDone.startsWith('posted:note-970'), 'thread: 回复落在 discussion thread（' + oThDone + '）')
+assert(thCalls.some((c) => c.method === 'POST' && c.path.includes('/discussions/disc-webhook/notes')), 'thread: POST discussions/:id/notes')
+// poll 路径（无 discussionId）→ GET discussions 扫描解析
+const oTh2 = await thResponder.handle({ project: 'g/th', issue: { iid: 8, title: 't', description: 'd' }, note: { id: 911, body: '@agent-bot 看', author: { username: 'bob' } } })
+const thSid2 = agentCreates[agentCreates.length - 1].sessionId
+assert(oTh2.startsWith('responded:session-'), 'thread: 解析路径注入（' + oTh2 + '）')
+const obTh2 = ob.createOutbound({ client: mkThClient, state: thState, stateFile: thStateFile, ack: thHelper, reply: thReply })
+const callsB = thCalls.length
+const oTh2Done = await obTh2.handleSessionEvent({ id: thSid2, events: [{ type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: '解析后回复' }] } } }] }, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+assert(oTh2Done.startsWith('posted:note-970'), 'thread: GET discussions 解析后进 thread（' + oTh2Done + '）')
+assert(thCalls.slice(callsB).some((c) => c.method === 'GET' && c.path.includes('/discussions')), 'thread: 无 discussionId 时 GET discussions 解析')
+// 找不到所在 discussion → 回落顶层 note
+const oTh3 = await thResponder.handle({ project: 'g/th', issue: { iid: 9, title: 't', description: 'd' }, note: { id: 912, body: '@agent-bot 看', author: { username: 'bob' } } })
+const thSid3 = agentCreates[agentCreates.length - 1].sessionId
+assert(oTh3.startsWith('responded:session-'), 'thread: 回落路径注入（' + oTh3 + '）')
+const obTh3 = ob.createOutbound({ client: mkThClient, state: thState, stateFile: thStateFile, ack: thHelper, reply: thReply })
+const callsC = thCalls.length
+const oTh3Done = await obTh3.handleSessionEvent({ id: thSid3, events: [{ type: 'assistant/message', data: { turn: 1, message: { content: [{ type: 'text', text: '回落顶层' }] } } }] }, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } })
+assert(oTh3Done.startsWith('posted:note-980'), 'thread: 找不到 discussion → 回落顶层（' + oTh3Done + '）')
+assert(thCalls.slice(callsC).some((c) => c.method === 'POST' && c.path.endsWith('/notes') && !c.path.includes('/discussions/')), 'thread: 回落 POST 顶层 notes')
+// 追问（无 @）→ sessionIndex 更新为最新触发 note 的 thread；回复跟着最新 thread 走
+const oThCont = await thResponder.handle({ project: 'g/th', issue: { iid: 7, title: 't', description: 'd' }, note: { id: 914, discussionId: 'disc-cont', body: '追问：进展如何', author: { username: 'bob' } } })
+assert(oThCont.startsWith('continued:'), 'thread: 追问注入（' + oThCont + '）')
+assert(thState.sessionIndex?.[thSid]?.discussionId === 'disc-cont' && thState.sessionIndex?.[thSid]?.noteId === 914, 'thread: 追问后 sessionIndex 指向最新触发 note')
+// 注入失败 + discussionId → ❌ 且错误原样进同 thread
+const badTh = lst.createResponder({ agents: badAgents, controller: mockController, store: lstStore, state: {}, stateFile: thStateFile, mentionUsername: 'agent-bot', ack: thHelper, reply: thReply })
+const oBadTh = await badTh.handle({ project: 'g/th', issue: { iid: 10, title: 't', description: 'd' }, note: { id: 913, discussionId: 'disc-err', body: '@agent-bot 看', author: { username: 'bob' } } })
+assert(oBadTh.startsWith('inject-failed:'), 'thread: 注入失败 outcome（' + oBadTh + '）')
+assert(thCalls.some((c) => c.method === 'POST' && c.path.includes('/discussions/disc-err/notes') && String(c.body.body).includes('session header mismatch')), 'thread: 注入失败错误原样进同 thread')
+// webhook 归一化携带 discussion_id
+const whDisc = lst.normalizeWebhookRecord({ payload: { object_kind: 'note', issue: { iid: 3 }, object_attributes: { id: 55, note: '@agent-bot hi', discussion_id: 'disc-77' }, project: { path_with_namespace: 'g/p' } } })
+assert(whDisc && whDisc.note.discussionId === 'disc-77', 'thread: webhook 归一化携带 discussion_id')
+
+
 
 if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
 console.log('\nall checks passed')
