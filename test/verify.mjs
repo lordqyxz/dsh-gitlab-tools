@@ -273,12 +273,42 @@ assert((await responder.handle({ project: 'g/p', issue: { iid: 1 }, note: { body
 assert((await responder.handle(hitNote('agent-bot'))) === 'skip-self-note', 'listener: SA 自己的 note → skip-self-note（防环）')
 const o3 = await responder.handle(hitNote('bob'))
 assert(o3.startsWith('responded:session-'), 'listener: 命中 → 创建会话注入（' + o3 + '）')
+assert(promptCalls[0].content[0].text.includes('git fetch origin'), 'listener: mention 提示词含本地检出新鲜度指引')
 assert(promptCalls.length === 1 && promptCalls[0].mode === 'queue' && promptCalls[0].content[0].text.includes('gitlab_create_note') && agentCreates.length === 1 && /^session-[0-9a-f-]{36}$/.test(agentCreates[0].sessionId) && agentCreates[0].meta?.cwd === '/Users/apple/dev', 'listener: 两步链注入（sessionId+meta.cwd+queue+回复指令）')
 await responder.handle(hitNote('bob'))
 await responder.handle(hitNote('bob'))
 assert((await responder.handle(hitNote('bob'))) === 'rate-limited', 'listener: 每 issue 频率上限（第 4 次/小时被限）')
 const responder2 = lst.createResponder({ store: lstStore, state: {}, stateFile: lstStateFile, mentionUsername: 'agent-bot' })
 assert((await responder2.handle(hitNote('bob'))) === 'no-agents-service', 'listener: 无 agents 服务 → 降级 no-agents-service')
+
+// 工作区分组：ensureWorkspace → attachSession（官方 session.create({workspaceId}) 同序）
+const wsAttaches = []
+const wsRegistry = {
+  resolveByPath: async (p) => (p === '/ws/existing' ? { path: p, attachSession: async (sid) => wsAttaches.push(['/ws/existing', sid]) } : undefined),
+  create: async (p) => ({ path: p, attachSession: async (sid) => wsAttaches.push([p, sid]) }),
+}
+const wsStateFile = join(tmpdir(), `gl-ws-${process.pid}-${Date.now()}.json`)
+const mkWsResponder = (registry, cwd) => lst.createResponder({ agents: mockAgents, controller: mockController, store: lstStore, state: {}, stateFile: wsStateFile, mentionUsername: 'agent-bot', resolveCwd: () => cwd, ensureWorkspace: (dir) => registry.resolveByPath(dir).then((w) => w ?? registry.create(dir)) })
+const wsHit = { project: 'g/ws', issue: { iid: 1, title: 't', description: 'd' }, note: { body: '@agent-bot 看', author: { username: 'bob' } } }
+const oWs = await mkWsResponder(wsRegistry, '/ws/existing').handle(wsHit)
+const wsSid = agentCreates[agentCreates.length - 1].sessionId
+assert(oWs.startsWith('responded:session-') && !oWs.includes('workspace'), 'listener: attach 成功 → outcome 无错误注记（' + oWs + '）')
+assert(wsAttaches.length === 1 && wsAttaches[0][0] === '/ws/existing' && wsAttaches[0][1] === wsSid, 'listener: 新会话 attachSession 进既有 workspace')
+const oWsCreate = await mkWsResponder(wsRegistry, '/ws/new').handle({ project: 'g/ws2', issue: { iid: 1, title: 't', description: 'd' }, note: { body: '@agent-bot 看', author: { username: 'bob' } } })
+assert(oWsCreate.startsWith('responded:session-') && wsAttaches.some((a) => a[0] === '/ws/new'), 'listener: 未注册路径 → create 分支后 attach')
+const failRegistry = { resolveByPath: async () => undefined, create: async () => { throw new Error('dir missing') } }
+const promptsBefore = promptCalls.length
+const oFail = await mkWsResponder(failRegistry, '/nope').handle({ project: 'g/fail', issue: { iid: 1, title: 't', description: 'd' }, note: { body: '@agent-bot 看', author: { username: 'bob' } } })
+assert(oFail.startsWith('responded:session-') && oFail.includes(';workspace-attach-failed:dir missing'), 'listener: attach 失败不阻断响应（outcome 带注记）')
+assert(promptCalls.length === promptsBefore + 1, 'listener: attach 失败仍完成 prompt 注入')
+// createListener 透传 + 冒烟探针覆盖 workspace
+const listener3 = lst.createListener({ client: async () => ({}), agents: mockAgents, controller: mockController, store: { append() {} }, state: {}, stateFile: wsStateFile, projects: [], mentionUsername: 'agent-bot', resolveCwd: () => '/ws/existing', ensureWorkspace: (dir) => wsRegistry.resolveByPath(dir).then((w) => w ?? wsRegistry.create(dir)) })
+const oL3 = await listener3.respond({ payload: { object_kind: 'note', user: { username: 'bob' }, issue: { iid: 9 }, object_attributes: { id: 88, note: '@agent-bot 看' }, project: { path_with_namespace: 'g/p' } }, source: 'ws' })
+assert(oL3.startsWith('responded:session-') && wsAttaches.some((a) => a[0] === '/ws/existing' && a[1] !== wsSid), 'listener: createListener 透传 ensureWorkspace → attach')
+const probe = await listener3.injectProbe()
+assert(probe.agent && probe.prompt && probe.workspace === 'attached' && probe.workspaceService === true, 'listener: 冒烟探针覆盖 workspace attach（' + probe.workspace + '）')
+assert(wsAttaches.length === 4, 'listener: workspace attach 计数（' + wsAttaches.length + '）')
+
 
 // 轮询器：mock client.raw（issues / merge_requests / notes 三个端点）
 const pollEvents = []
@@ -360,6 +390,7 @@ const pipelineEvent = { project: 'g/p', pipeline: { id: 42, ref: 'feature/x', sh
 const t1 = await responder3.handle(pipelineEvent)
 assert(t1.startsWith('triaged:session-') && plPrompts.length === 1, 'pipeline: MR 失败流水线 → 分诊会话（' + t1 + '）')
 assert(plPrompts[0].content[0].text.includes('feature/x') && plPrompts[0].content[0].text.includes('rspec') && plPrompts[0].content[0].text.includes('不要自己调用 gitlab_create_note'), 'pipeline: 提示词含分支/预取失败作业/回复通道')
+assert(plPrompts[0].content[0].text.includes('git fetch origin') && plPrompts[0].content[0].text.includes('feature/x'), 'pipeline: 提示词含 fetch 指引与 MR 源分支')
 assert(plState.sessionIndex?.[t1.slice('triaged:'.length)]?.kind === 'mr' && plState.sessionIndex?.[t1.slice('triaged:'.length)]?.iid === 7, 'pipeline: sessionIndex 绑定 kind=mr')
 assert((await responder3.handle({ project: 'g/p', pipeline: { id: 43, status: 'success' }, merge_request: { iid: 7 } })) === 'pipeline-not-failed', 'pipeline: 成功流水线不触发')
 assert((await responder3.handle({ project: 'g/p', pipeline: { id: 44, status: 'failed' } })) === 'pipeline-not-mr', 'pipeline: 非 MR 流水线不触发')
