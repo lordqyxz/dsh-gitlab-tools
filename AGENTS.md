@@ -60,23 +60,23 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 6. **client 懒加载**：`createClient` 纯配置构造（零子进程），`apply` 里用 `clientPromise ??=` 记忆化，首个工具调用才构建。
 
 13. **GitLab webhook 接收（可选功能，2026-09）**：`lib/webhook.js`（纯 Node、零 cordis 依赖、可离线测）+ `lib/index.js` 装配。
-    - **启用**：插件 config（cordis.patch.yml 的 gitlab-tools insert）加 `webhookSecretToken`（值 = GitLab webhook 设置里的 Secret token）；**为空 = 功能关闭**（POST /gitlab-tools/webhook → 404 `webhook-disabled`，不建 store、事件不落盘）。改 insert config 热生效（cordis 重新 apply）。
-    - **端点**：`POST /gitlab-tools/webhook`（挂在既有 prefix 路由下，分支在最前）。fail-closed：token 不匹配 401、非 POST 405、体 >2MB 400；`X-Gitlab-Webhook-UUID` 去重（GitLab 重试重发同 uuid）；`webhookProjectWhitelist` 白名单（空 = 全收；白名单外 202 + 记录标 skipped）。
-    - **事件落盘**：`webhookEventsFile`（默认 `~/.dsh/gitlab-tools/webhook-events.jsonl`，超 `webhookMaxFileLines` 2000 行自动保留后半）。**会被 dsh-config-sync 同步到 iCloud**，payload 含项目内容，介意就加进 config-sync excludes。
-    - **查询工具**：`gitlab_webhook_events`（首行接收器状态：文件路径/总数/类型分布；`detail: true` 附 payload）。
+    - **启用**：插件 config（cordis.patch.yml 的 gitlab-tools insert）加 `agentSecretToken`（值 = GitLab webhook 设置里的 Secret token）；**为空 = 功能关闭**（POST /gitlab-tools/webhook → 404 `webhook-disabled`，不建 store、事件不落盘）。改 insert config 热生效（cordis 重新 apply）。
+    - **端点**：`POST /gitlab-tools/webhook`（挂在既有 prefix 路由下，分支在最前）。fail-closed：token 不匹配 401、非 POST 405、体 >2MB 400；`X-Gitlab-Webhook-UUID` 去重（GitLab 重试重发同 uuid）；`agentProjectWhitelist` 白名单（空 = 全收；白名单外 202 + 记录标 skipped）。
+    - **事件落盘**：`agentEventsFile`（默认 `~/.dsh/gitlab-tools/webhook-events.jsonl`，超 `agentMaxFileLines` 2000 行自动保留后半）。**会被 dsh-config-sync 同步到 iCloud**，payload 含项目内容，介意就加进 config-sync excludes。
+    - **查询工具**：`gitlab_agent_events`（首行接收器状态：文件路径/总数/类型分布；`detail: true` 附 payload）。
     - **测试**：`node test/verify.mjs` 第 4 节（mock：401/405/200 落盘/dedup/note 摘要/未启用 404 + 工具如实报告）。
     - **连接层（GitLab→本机，未定）**：GitLab 在公网 VPS（47.97.44.134:8443），本机 GUI 127.0.0.1:3080。首选 SSH 反向隧道（`ssh -N -R 127.0.0.1:3081:127.0.0.1:3080 vps`，GitLab URL 填 `http://127.0.0.1:3081/gitlab-tools/webhook`，Admin 后台开「允许 webhook 请求本地网络」）；无 SSH 权限则 cloudflared + 只转发该路径的本机中转进程（**勿直接暴露 3080，整个 GUI 会公网可达**）。
     - **Phase 2（issue @mention 自动响应，未实现）**：note 事件 + `payload.issue` 存在 + 正文含 SA 用户名 → 宿主端会话注入（参考客户端「创建开发会话」的 `sessions.create({ workspaceId })` + `binding(id).session.prompt(prompt, 'queue')` 模式定位宿主等价 API）→ 以 aiToken（SA id=42）POST issue note。**防环**：忽略 `author.username === SA 用户名` 的 note（bot 自己的评论同样触发 note webhook）+ 同一 issue 频率上限。MR 事件只落盘展示不自动响应。
 
 14. **事件监听管道（轮询源 + @mention 自动响应，2026-09）**：`lib/listener.js`（纯 Node，零 cordis 依赖）+ index.js 装配；与 webhook 推送源共用 EventStore 与响应管道。
-    - **轮询源**：config `webhookPollProjects`（要监听的项目，空=关闭）+ `webhookPollIntervalMs`（默认 30s，最小 10s）。拉 `issues/merge_requests?order_by=updated_at&updated_after=<游标>` → 新 notes（`sort=desc&per_page=30`，剔 system）→ 按 `project:kind:noteId` 去重；游标 + 已见 id 落盘 `webhookPollStateFile`（默认 ~/.dsh/gitlab-tools/webhook-poll-state.json），**重启不重放**。用 setTimeout 链（非 setInterval）防慢周期堆叠；ctx.effect 注册，卸载自清。
-    - **自动响应**：config `webhookMentionUsername`（SA 用户名，空=只记录不响应）。note 命中 @mention → `buildMentionPrompt`（内嵌 issue 标题/描述/触发评论）→ 宿主注入两步链（见下）→ **agent 自己用 gitlab_create_note（aiToken/SA 身份）回复**，响应器不等 turn 完成。**防环**：忽略 author.username===mentionUsername 的 note（bot 自己的评论同样触发 note webhook/轮询）；`responded` 状态文件里每 issue 每小时上限 3 次。
+    - **轮询源**：config `agentPollProjects`（要监听的项目，空=关闭）+ `agentPollIntervalMs`（默认 30s，最小 10s）。拉 `issues/merge_requests?order_by=updated_at&updated_after=<游标>` → 新 notes（`sort=desc&per_page=30`，剔 system）→ 按 `project:kind:noteId` 去重；游标 + 已见 id 落盘 `agentPollStateFile`（默认 ~/.dsh/gitlab-tools/webhook-poll-state.json），**重启不重放**。用 setTimeout 链（非 setInterval）防慢周期堆叠；ctx.effect 注册，卸载自清。
+    - **自动响应**：config `agentMentionUsername`（SA 用户名，空=只记录不响应）。note 命中 @mention → `buildMentionPrompt`（内嵌 issue 标题/描述/触发评论）→ 宿主注入两步链（见下）→ **agent 自己用 gitlab_create_note（aiToken/SA 身份）回复**，响应器不等 turn 完成。**防环**：忽略 author.username===mentionUsername 的 note（bot 自己的评论同样触发 note webhook/轮询）；`responded` 状态文件里每 issue 每小时上限 3 次。
     - **宿主注入两步链（冒烟实证 2026-09）**：客户端门面的 `binding(id).session.prompt` 在宿主侧不存在（冒烟实测 `create({})` 报 session header id 不匹配）；**也不要先 `sessions.create`**——`agents.create` 的工厂内部自己发布会话，预建同 id 会话会报 already exists。
     正确形状：`await ctx.agents.create({ sessionId: `'session-' + randomUUID()` })`（一体化建会话+挂 agent+启 loop）→ `await ctx.sessionController.prompt({ requestId: randomUUID(), sessionId, mode: `'queue'`, content: [{ type: `'text'`, text }] })`（GUI 发消息同一 API）。
     inject 需含 `agents`/`sessionController`。**冒烟路由 `POST /gitlab-tools/webhook-smoke`** 保留，逐步报告链路状态；降级链：no-agents-service → no-session-controller。
     - **共用管道**：webhook 推送源经 handler `respond` 回调走同一 responder（`normalizeWebhookRecord` 把 GitLab 原始 payload 归一化成 note/issue 顶层形状）；轮询源在 cycle 内直接调用。respond 失败不阻断入库（record.responder 记录错误）。
-    - **工具**：`gitlab_webhook_events` head 含轮询/响应状态；`gitlab_webhook_poll_now` 手动触发一轮（验证用）。测试：verify.mjs 第 5 节（防环/限流/降级/游标/去重，mock client+sessions，不碰定时器）。
-    - **注意**：改 webhookPollProjects/webhookMentionUsername 走 insert config（热生效，cordis 重新 apply 会重建 listener 与定时器）。
+    - **工具**：`gitlab_agent_events` head 含轮询/响应状态；`gitlab_agent_poll_now` 手动触发一轮（验证用）。测试：verify.mjs 第 5 节（防环/限流/降级/游标/去重，mock client+sessions，不碰定时器）。
+    - **注意**：改 agentPollProjects/agentMentionUsername 走 insert config（热生效，cordis 重新 apply 会重建 listener 与定时器）。
 
 ## 常用操作
 
@@ -97,7 +97,7 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 ### pipeline 分诊（MR 流水线失败 → 分诊会话）
 
 - \`normalizeWebhookRecord\` 扩展：object_kind=pipeline 且 payload 带 merge_request → 事件形状 \`{ pipeline, merge_request, failedJobs }\`（failedJobs 从 payload.builds 过滤）；非 MR 流水线返回 null（只落盘）。**轮询器不产 pipeline 事件**——分诊是推送源（webhook/ntfy）专属能力，轮询兜底不含它。
-- \`responder.handlePipeline\`：status=failed 且有 MR 才触发；failedJobs 不足时经 client 拉 \`/pipelines/:id/jobs?scope=failed\` 预取；提示词含 MR/分支/流水线/失败作业 + 排查线索（jobs/:id/trace）+ 回复通道；会话绑定 kind='mr'，分诊结论自动贴回 MR 评论。config \`webhookPipelineTriage\` 可关（默认开）。
+- \`responder.handlePipeline\`：status=failed 且有 MR 才触发；failedJobs 不足时经 client 拉 \`/pipelines/:id/jobs?scope=failed\` 预取；提示词含 MR/分支/流水线/失败作业 + 排查线索（jobs/:id/trace）+ 回复通道；会话绑定 kind='mr'，分诊结论自动贴回 MR 评论。config \`agentPipelineTriage\` 可关（默认开）。
 - 频率上限复用 responded（key \`project#mr-<iid>\` 每小时 3 次）。
 
 ### 跨源去重（webhook ↔ ntfy ↔ poll）
@@ -110,6 +110,14 @@ DSH cordis 插件，把 GitLab 操作暴露为 agent 工具。底座是**从 Git
 - \`dsh-agent-dsh-1\` 容器（**host 网络**）跑 \`dsh --profile bug-triage --port 3080 --no-open\`（profile 名为历史命名，能力本体是 GitLab Agent，见顶部术语约定）；DSH_HOME=/data/.dsh ↔ 宿主 /opt/dsh-agent/data/.dsh；GUI 只绑 127.0.0.1:3080（防 RCE，DSH 拒绝 --host 0.0.0.0）。
 - GitLab 同机容器（8880/8443/8822）。入站链：GitLab webhook → \`http://172.17.0.1:9100/gitlab-tools/webhook\`（docker 网桥地址）→ 宿主 socat（\`TCP-LISTEN:9100,bind=172.17.0.1,fork\` → 127.0.0.1:3080，systemd 单元 dsh-gitlab-webhook）→ 插件内建接收器（secret 校验/去重/防环/会话桥接全是插件现成逻辑）。GitLab 侧需允许 webhook 发往本地网络（Admin → Settings → Network → Outbound requests；此前 ntfy-converter 绑 172.17.0.1:17587 已依赖同一放行）。
 - 插件真身放持久卷：宿主 /opt/dsh-agent/data/dsh-gitlab-tools（容器内 /data/dsh-gitlab-tools），profile node_modules 的 symlink 指向它（容器重建不丢）；/opt/dsh-gitlab-tools（容器层）是旧位置，重建即失效。部署 = 本地 rsync lib/ → 卷 → \`docker restart dsh-agent-dsh-1\`。
-- profile-init.sh 每次启动重写 cordis.patch.yml（现含全套 webhook 配置：webhookSecretToken / webhookMentionUsername / webhookPollProjects 兜底轮询 / webhookDefaultCwd=/workspace/repo），entrypoint.sh 再 sed 注入 SA token。轮询器在服务器定位是兜底（间隔放大到 120s）。
-- **AI 身份分配（2026-09-17）**：服务器 bug-triage = dev-agent（id 46），本地 Mac = DeepSeek Harness SA（id 42）——身份由各客户端的 aiToken 决定，两台各自只响应 @ 自己账户的评论（互不触发、无双响应）。SA token 存 volume 文件 /data/dsh-gitlab-tools/.sa-token（600），entrypoint.sh 文件优先、GITLAB_TOKEN env（.env）回退；轮换 = 改 volume 文件 + docker restart，无需重建容器。签发走 admin impersonation API（POST /users/:id/impersonation_tokens，service_accounts 专属签发端点在本实例 404），两把 token 均 api scope、2027-09-17 到期。注意：改 webhookMentionUsername 必须与该台 aiToken 的账户一致（防环与触发同源）。AI 身份下拉功能曾实现后整体 revert（5728650）——身份由 token 决定，下拉属过度设计。
-- 本机（Mac）dev 实例继续用 ntfy 推送源 + 轮询收事件；**双机同时开 mention 自动响应会对同一评论双响应**——留给你决定哪台响应（关掉一台的 webhookMentionUsername 即可）。
+- profile-init.sh 每次启动重写 cordis.patch.yml（现含全套 webhook 配置：agentSecretToken / agentMentionUsername / agentPollProjects 兜底轮询 / agentDefaultCwd=/workspace/repo），entrypoint.sh 再 sed 注入 SA token。轮询器在服务器定位是兜底（间隔放大到 120s）。
+- **AI 身份分配（2026-09-17）**：服务器 bug-triage = dev-agent（id 46），本地 Mac = DeepSeek Harness SA（id 42）——身份由各客户端的 aiToken 决定，两台各自只响应 @ 自己账户的评论（互不触发、无双响应）。SA token 存 volume 文件 /data/dsh-gitlab-tools/.sa-token（600），entrypoint.sh 文件优先、GITLAB_TOKEN env（.env）回退；轮换 = 改 volume 文件 + docker restart，无需重建容器。签发走 admin impersonation API（POST /users/:id/impersonation_tokens，service_accounts 专属签发端点在本实例 404），两把 token 均 api scope、2027-09-17 到期。注意：改 agentMentionUsername 必须与该台 aiToken 的账户一致（防环与触发同源）。AI 身份下拉功能曾实现后整体 revert（5728650）——身份由 token 决定，下拉属过度设计。
+- 本机（Mac）dev 实例继续用 ntfy 推送源 + 轮询收事件；**双机同时开 mention 自动响应会对同一评论双响应**——留给你决定哪台响应（关掉一台的 agentMentionUsername 即可）。
+
+## 16. 命名迁移与身份分工（2026-09-17）
+
+- 触发词改为 @dev-agent：服务器 bug-triage（现名 gitlab-agent）profile 以 **Dev Agent**（id=46，ty 组 Developer）服务账户身份发言与响应；本地 Mac 以 **DeepSeek Harness SA**（service_account_5c681…，id=42）身份手动操作。两台 token 都是 admin 经 impersonation tokens API（POST /users/:id/impersonation_tokens）签发（2027-09-17 到期）。
+- 配置键迁移（一次性协调，无旧键回退）：webhookSecretToken→agentSecretToken、webhookEventsFile→agentEventsFile、webhookMaxFileLines→agentMaxFileLines、webhookProjectWhitelist→agentProjectWhitelist、webhookPollProjects→agentPollProjects、webhookPollIntervalMs→agentPollIntervalMs、webhookMentionUsername→agentMentionUsername、webhookNtfyUrl/Token→agentNtfyUrl/Token、webhookDefaultCwd→agentDefaultCwd、webhookPipelineTriage→agentPipelineTriage、webhookPollStateFile→agentPollStateFile。迁移工具仍叫 gitlab_webhook_events / gitlab_webhook_poll_now 的改名：gitlab_agent_events / gitlab_agent_poll_now。落盘文件名不变（webhook-events.jsonl / webhook-poll-state.json，保持数据连续）。端点路径 /gitlab-tools/webhook 不变（GitLab hook 无需改）。
+- 服务器 profile 改名 bug-triage → gitlab-agent：profile-init.sh / entrypoint.sh 内全部路径与 --profile 参数同步；旧 profile 目录移到 /data/.dsh/profiles/bug-triage.bak-*；sessions 与 settings.yaml 是 DSH_HOME 级，改名不受影响。systemd 单元 dsh-gitlab-webhook → gitlab-agent-webhook。
+- SA token 存储定稿：docker volume 文件 /data/dsh-gitlab-tools/.sa-token（600），entrypoint 文件优先、GITLAB_TOKEN env 回退；轮换 = 改文件 + docker restart。曾用 GITLAB_TOKEN env 被吊销引发 entrypoint git fetch 失败 → set -e 崩溃循环（叠加 settings.yaml 半删除损坏，二次崩溃），修复过程见 git 历史。
+- 崩溃循环排障入口：docker ps -a 看 RestartCount；docker logs 看 entrypoint 哪一步失败（git fetch 失败 = token 问题；settings section must be an object = settings.yaml 用户层结构损坏，整段移除受损命名空间）。

@@ -218,12 +218,12 @@ assert(tabs.length === 1 && tabs[0].id === 'gitlab-tools:issues' && tabs[0].sing
 const decl = tabs[0].settings?.pluginToggles ?? []
 assert(decl.length === 2 && decl.some((r) => r.key === 'defaultProject' && r.type === 'text') && decl.some((r) => r.key === 'refreshMs' && r.type === 'number'), 'declares pluginToggles settings (defaultProject/refreshMs)')
 
-// ── 4. webhook 接收端点（可选功能，config.webhookSecretToken）──────────────
+// ── 4. webhook 接收端点（可选功能，config.agentSecretToken）──────────────
 const { ctx: wctx, routes: wroutes, tools: wtools } = makeCtx()
 await mod.apply(wctx, {
   host: 'https://gl.example.com', token: 'glpat-x', timeoutMs: 60000,
-  webhookSecretToken: 'whsec-1',
-  webhookEventsFile: join(tmpdir(), `gl-webhook-test-${process.pid}-${Date.now()}.jsonl`),
+  agentSecretToken: 'whsec-1',
+  agentEventsFile: join(tmpdir(), `gl-webhook-test-${process.pid}-${Date.now()}.jsonl`),
 })
 const wroute = wroutes.find((r) => r.kind === 'prefix' && r.path === '/gitlab-tools')
 const pushBody = { object_kind: 'push', user_name: 'alice', ref: 'refs/heads/main', total_commits_count: 2, project: { id: 7, path_with_namespace: 'group/demo' } }
@@ -238,8 +238,8 @@ assert(wr.status === 200 && wr.json.dedup === true, 'webhook: 同 uuid 重发 �
 const noteBody = { object_kind: 'note', user: { username: 'bob' }, issue: { iid: 12, title: '登录页崩溃' }, object_attributes: { note: '@agent-bot 看一下' }, project: { id: 7, path_with_namespace: 'group/demo' } }
 wr = await call(wroute, 'POST', '/gitlab-tools/webhook', noteBody, { 'x-gitlab-token': 'whsec-1', 'x-gitlab-webhook-uuid': 'u-2' })
 assert(wr.status === 200, 'webhook: note 事件 → 200')
-const evTool = wtools.find((t) => t.name === 'gitlab_webhook_events')
-assert(Boolean(evTool), 'webhook: 注册 gitlab_webhook_events 工具')
+const evTool = wtools.find((t) => t.name === 'gitlab_agent_events')
+assert(Boolean(evTool), 'webhook: 注册 gitlab_agent_events 工具')
 const evOut = await evTool.execute({ detail: false })
 assert(evOut.text.includes('接收器状态') && evOut.text.includes('bob 评论 issue #12'), 'webhook: 查询工具输出状态+note 摘要')
 assert(Array.isArray(evOut.json.events) && evOut.json.events.length === 2, 'webhook: 查询工具 json.events')
@@ -250,7 +250,7 @@ await mod.apply(dctx, { host: 'https://gl.example.com', token: 'glpat-x', timeou
 const droute = droutes.find((r) => r.kind === 'prefix' && r.path === '/gitlab-tools')
 const dr = await call(droute, 'POST', '/gitlab-tools/webhook', pushBody)
 assert(dr.status === 404 && dr.json.code === 'webhook-disabled', 'webhook: 未启用 → 404 webhook-disabled')
-const dTool = dtools.find((t) => t.name === 'gitlab_webhook_events')
+const dTool = dtools.find((t) => t.name === 'gitlab_agent_events')
 const dOut = await dTool.execute({})
 assert(dOut.text.includes('webhook=off') && dOut.text.includes('轮询=off'), 'webhook: 未启用时查询工具如实报告（webhook=off）')
 
