@@ -102,7 +102,7 @@ export function buildPrompt(issue: Issue, project?: string, cwd?: string, contex
     hasNotes ? context!.notes : "- （无既有讨论）",
     "",
     "## 开发规程（务必按此执行：先规划、先确认，再动手）",
-    "0. 【只读调研·不写代码】基于上面已内嵌的 issue 正文与讨论（不必再 gitlab_view_issue / gitlab_list_notes 重复拉取），" +
+    "0. 【只读调研·不写代码】基于上面已内嵌的 issue 正文与讨论（不必再 GitLab 工具 重复拉取），" +
       (cwd
         ? `clone/定位仓库后，评估【该 issue 与当前代码的匹配程度】：需求能落在哪些现有模块/代码路径上、改动范围大概多大。`
         : `评估该 issue 与代码的匹配程度：先确定/克隆该项目到合适工作目录。`) +
@@ -110,11 +110,11 @@ export function buildPrompt(issue: Issue, project?: string, cwd?: string, contex
     "1. 【制定 plan】把【开发计划】用 gitlab_create_note 发到 issue #${issue.iid} 的评论里——含：对需求的理解、方案选择、issue 与代码匹配度评估、疑问点、实施步骤、工作量估计。",
     "2. 【更新标签】用 gitlab_api 更新该 issue 的标签以反映当前状态（例如标为「规划中/待确认」或你按需新建的状态标签），但先不要把「进行中」标得太早。",
     "3. 【触发对话·等待确认】把 plan 同步到 issue 评论，必要时在对话里向用户说明并明确询问确认。**等待用户确认后再开始实际开发。**",
-    "4. 【确认后实现】用户确认后，严格按 plan 实现；期间若用户在 issue 评论或对话里回复（答复疑问、给新方案、@ 你，新增的评论不在启动内容里），用 gitlab_list_notes 增量读取新增讨论并把反馈正确加载进执行流，不要忽略。",
+    "4. 【确认后实现】用户确认后，严格按 plan 实现；期间若用户在 issue 评论或对话里回复（答复疑问、给新方案、@ 你，新增的评论不在启动内容里），用 gitlab_api 调 GET projects/{id}/issues/{iid}/notes?sort=desc&order_by=created_at 增量读取新增讨论（与启动内嵌内容取差集）并把反馈正确加载进执行流，不要忽略。",
     "5. 【收尾】实现完成后，用 gitlab_create_note 在 issue 上补充实现说明/结论（必要时提交 MR），说明如何验证，并把标签更新为已完成/进行中对应的状态。",
     "",
     "## 对话交互",
-    "用户在对话里 @ 你或直接对你说话时，都要正确响应其请求；若该请求属于某个 issue，先 gitlab_list_notes 读讨论再回应。",
+    "用户在对话里 @ 你或直接对你说话时，都要正确响应其请求；若该请求属于某个 issue，先经 gitlab_api 读该 issue 讨论再回应。",
   ].join("\n");
 }
 

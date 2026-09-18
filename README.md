@@ -54,21 +54,20 @@ dsh-gitlab-tools (cordis 插件)
 
 SDK 用 `PRIVATE-TOKEN` 头访问。缺 host/token 时工具会抛清晰报错。
 
-## 工具清单（渐进式：核心 + 全量）
+## 工具面（2026-09-18 收敛：1 网关 + 1 查询 + 1 写侧 + 1 触发器）
 
 | 工具 | 说明 |
 |---|---|
-| `gitlab_current_user` | 当前登录用户 |
-| `gitlab_list_projects` | 项目列表（membership/search/排序） |
-| `gitlab_list_issues` / `gitlab_view_issue` / `gitlab_create_issue` | issue 列表/详情/创建 |
-| `gitlab_list_mrs` / `gitlab_view_mr` / `gitlab_create_mr` / `gitlab_merge_mr` | MR 列表/详情/创建/合并 |
-| `gitlab_list_pipelines` / `gitlab_latest_pipeline` | CI/CD pipeline 列表/最新 |
-| `gitlab_create_note` | 给 issue 加评论（开发计划/观点/疑问/方案同步用） |
-| `gitlab_list_notes` | 读取 issue 完整讨论（旧→新；加载用户评论里的回复进开发流程用） |
-| `gitlab_api` | **全量**：任意 REST v4 端点直通（覆盖 spec 全部 1145 个操作） |
+| `gitlab_api` | **全量网关**：任意 REST v4 端点直通（spec 全部 ~1145 个操作：issue/MR/pipeline CRUD、标签、里程碑、release、分支/提交、用户、群组……）。端点手册见 skill `gitlab_api_tool` |
+| `gitlab_api_lookup` | 端点查询：关键词搜全部 ~1150 个操作 / `op` 查详情（含可改编示例）；`gitlab_api` 出错时响应自动附正确用法建议 |
+| `gitlab_create_note` | 给 issue 加评论（开发计划/观点/疑问/方案同步；自动桥接会话的最终回复由系统自动贴回，勿用它发回复） |
+| `gitlab_agent_poll_now` | 手动触发一轮事件轮询（验证用） |
 
 `project` 参数接受 `group/project` 路径或数字 id（省略时用 config 的 `defaultProject`）。
 
+**skill `gitlab_api_tool`**（`skills/gitlab_api_tool/SKILL.md`）是 `gitlab_api` 的使用手册：调用形状、常用操作迁移对照、分页与 60k 截断应对、glab（人用身份）路线。本机安装：`ln -s "$PWD/skills/gitlab_api_tool" ~/.agents/skills/gitlab_api_tool`。
+
+不再提供 gitlab_list_issues / view_issue / create_issue / list_mrs / view_mr / create_mr / merge_mr / list_pipelines / latest_pipeline / current_user / list_projects / list_notes 等具名工具——一律 `gitlab_api` 直调（skill 内有迁移对照表）。
 ## 安装（本机）
 
 ```bash

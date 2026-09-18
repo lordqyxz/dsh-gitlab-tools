@@ -4,7 +4,7 @@
 //  3. browser bundle lib/client.js loads through window.__ModuleLoader__ and
 //     registers a dsh-better-sidebar tab + settings.section slot
 import { Readable } from 'node:stream'
-import { readFileSync } from 'node:fs'
+import { readFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -77,10 +77,28 @@ async function call(route, method, path, body, headers) {
 }
 
 // configured instance
-const { ctx, routes, userLayer, creds } = makeCtx()
+const { ctx, routes, userLayer, creds, tools } = makeCtx()
 await mod.apply(ctx, { host: 'https://gl.example.com', token: 'glpat-x', defaultProject: '', perPage: 20, timeoutMs: 60000 })
 const route = routes.find((r) => r.kind === 'prefix' && r.path === '/gitlab-tools')
 assert(Boolean(route), 'registers /gitlab-tools prefix route')
+
+const toolNames = tools.map((t) => t.name).sort()
+assert(
+  JSON.stringify(toolNames) === JSON.stringify(['gitlab_agent_poll_now', 'gitlab_api', 'gitlab_api_lookup', 'gitlab_create_note']),
+  '工具面收敛为 4 个: ' + toolNames.join(', ')
+)
+assert(
+  (tools.find((t) => t.name === 'gitlab_api')?.description ?? '').includes('gitlab_api_tool'),
+  'gitlab_api 描述指向 gitlab_api_tool 手册'
+)
+assert(
+  (tools.find((t) => t.name === 'gitlab_api')?.description ?? '').includes('discussions'),
+  'gitlab_api 描述内置浓缩手册（实例坑 MR notes→discussions）'
+)
+assert(
+  (tools.find((t) => t.name === 'gitlab_create_note')?.description ?? '').includes('never for your final reply'),
+  'create_note 描述保留自动贴回契约'
+)
 
 let r = await call(route, 'GET', '/gitlab-tools/status')
 assert(r.status === 200 && r.json.ok === true && r.json.configured === true, 'GET /status → configured=true')
@@ -276,6 +294,74 @@ assert(der.status === 200 && der.json.ok === true && der.json.status.receiver ==
 // ── 5. listener：响应器 + 轮询器（离线单测，不碰定时器）───────────────────
 const lst = await import(join(ROOT, 'lib/listener.js'))
 assert(lst.mentionsUser('@agent-bot 看看', 'agent-bot') && !lst.mentionsUser('普通评论', 'agent-bot'), 'listener: mentionsUser 命中/不误触')
+assert(lst.deriveProjectDir('ty/data-flow', '/workspace/repos') === '/workspace/repos/data-flow', 'listener: deriveProjectDir 项目名推断（ty/data-flow → data-flow）')
+assert(lst.deriveProjectDir('Ty/Data.Flow2', '/workspace/repos/') === '/workspace/repos/data.flow2', 'listener: deriveProjectDir 大小写归一/特殊字符清洗/根尾斜杠')
+assert(lst.deriveProjectDir('', '/x') === '' && lst.deriveProjectDir('a/b', '') === '', 'listener: deriveProjectDir 空参防御返回空串')
+// reposync：响应前自动 clone/fetch（token 不落盘；脏树不 ff；证书降级；失败不阻断响应）
+const rsMod = await import(join(ROOT, 'lib/reposync.js'))
+const rsTmp = join(tmpdir(), 'gl-reposync-' + process.pid + '-' + Date.now())
+mkdirSync(rsTmp, { recursive: true })
+const mkRs = (fake, extra = {}) => rsMod.createRepoSync({ root: rsTmp, host: 'https://gl.example.com', token: async () => 'tok123', runGit: fake, ...extra })
+// A. 缺失目录 → 自动 clone（一次性鉴权 URL）+ remote 烙回干净 URL（token 不落盘）
+let cloneArgs = null
+let setUrl = null
+const dirA = join(rsTmp, 'data-flow')
+const rsA = mkRs(async (args) => {
+  if (args[0] === 'clone') { cloneArgs = args; mkdirSync(join(dirA, '.git'), { recursive: true }); return { code: 0, stdout: '', stderr: '' } }
+  if (args[3] === 'set-url') setUrl = args[5]
+  return { code: 0, stdout: '', stderr: '' }
+})
+const rA = await rsA.prepare('ty/data-flow')
+assert(rA.usable === true && rA.status === 'cloned' && rA.dir === dirA, 'reposync: 缺失目录 → 自动 clone 成功')
+assert(cloneArgs && cloneArgs[1] === 'https://oauth2:tok123@gl.example.com/ty/data-flow.git', 'reposync: clone 走一次性鉴权 URL')
+assert(setUrl === 'https://gl.example.com/ty/data-flow.git', 'reposync: clone 后 origin 烙回干净 URL（token 不落盘）')
+// A2. clone 遇自签证书 → -c http.sslVerify=false 降级重试一次
+const dirA2 = join(rsTmp, 'cert-clone')
+const cloneA2 = []
+const rsA2 = mkRs(async (args) => {
+  if (args[0] === 'clone' || (args[0] === '-c' && args[2] === 'clone')) { cloneA2.push(args.slice(0, 4).join(' ')); if (cloneA2.length === 1) return { code: 128, stdout: '', stderr: 'fatal: unable to access: server certificate verification failed' }; mkdirSync(join(dirA2, '.git'), { recursive: true }); return { code: 0, stdout: '', stderr: '' } }
+  return { code: 0, stdout: '', stderr: '' }
+})
+const rA2 = await rsA2.prepare('acme/cert-clone')
+assert(rA2.status === 'cloned' && cloneA2.length === 2 && cloneA2[1].includes('http.sslVerify=false'), 'reposync: clone 证书失败 → 降级 sslVerify=false 重试一次')
+// B. 已有检出 → fetch（鉴权在 argv）+ 干净树 ff-only 到 origin/branch
+const dirB = join(rsTmp, 'clean-repo'); mkdirSync(join(dirB, '.git'), { recursive: true })
+const seqB = []
+const rsB = mkRs(async (args) => { seqB.push(args); const k = args.join(' ')
+  if (k.includes('status --porcelain')) return { code: 0, stdout: '', stderr: '' }
+  if (k.includes('rev-parse')) return { code: 0, stdout: 'main\n', stderr: '' }
+  return { code: 0, stdout: '', stderr: '' } })
+const rB = await rsB.prepare('acme/clean-repo')
+assert(rB.status === 'fetched' && seqB.some((a) => a[2] === 'fetch' && String(a[3]).includes('oauth2:tok123@')), 'reposync: 已有检出 → fetch（鉴权在 argv 不落盘）')
+assert(seqB.some((a) => a.includes('merge') && a.includes('origin/main')), 'reposync: 干净树 ff-only 到 origin/branch')
+// C. 脏工作树 → 只 fetch 不 ff（绝不碰用户未提交改动）
+const dirC = join(rsTmp, 'dirty-repo'); mkdirSync(join(dirC, '.git'), { recursive: true })
+let mergedC = false
+const rsC = mkRs(async (args) => { const k = args.join(' ')
+  if (k.includes('merge')) { mergedC = true; return { code: 0, stdout: '', stderr: '' } }
+  if (k.includes('status --porcelain')) return { code: 0, stdout: ' M x\n', stderr: '' }
+  return { code: 0, stdout: '', stderr: '' } })
+const rC = await rsC.prepare('acme/dirty-repo')
+assert(rC.status === 'fetched-dirty' && !mergedC, 'reposync: 脏工作树 → 只 fetch 不 ff')
+// D. 证书失败 → -c http.sslVerify=false 降级重试一次
+const dirD = join(rsTmp, 'cert-repo'); mkdirSync(join(dirD, '.git'), { recursive: true })
+const fetchAttempts = []
+const rsD = mkRs(async (args) => { const k = args.join(' ')
+  if (k.includes('fetch')) { fetchAttempts.push(args.slice(0, 4).join(' ')); if (fetchAttempts.length === 1) return { code: 128, stdout: '', stderr: 'fatal: unable to access: SSL certificate problem: self-signed certificate' }; return { code: 0, stdout: '', stderr: '' } }
+  if (k.includes('rev-parse')) return { code: 0, stdout: 'main\n', stderr: '' }
+  return { code: 0, stdout: '', stderr: '' } })
+const rD = await rsD.prepare('acme/cert-repo')
+assert(rD.status === 'fetched' && fetchAttempts.length === 2 && fetchAttempts[1].includes('http.sslVerify=false'), 'reposync: 证书失败 → 降级 sslVerify=false 重试一次')
+// E. clone 失败 → usable=false（resolveCwd 回落 agentDefaultCwd，响应不阻断）
+const rsE = mkRs(async (args) => args[0] === 'clone' ? { code: 128, stdout: '', stderr: 'repository not found' } : { code: 0, stdout: '', stderr: '' })
+const rE = await rsE.prepare('acme/missing')
+assert(rE.usable === false && rE.status === 'clone-failed', 'reposync: clone 失败 → usable=false')
+// F. 并发去重：同目录同时两请求只 clone 一次
+let cloneCount = 0
+const dirF = join(rsTmp, 'race-repo')
+const rsF = mkRs(async (args) => { if (args[0] === 'clone') { cloneCount++; await new Promise((res) => setTimeout(res, 20)); mkdirSync(join(dirF, '.git'), { recursive: true }) } return { code: 0, stdout: '', stderr: '' } })
+await Promise.all([rsF.prepare('acme/race-repo'), rsF.prepare('acme/race-repo')])
+assert(cloneCount === 1, 'reposync: 并发 prepare 去重（同目录只 clone 一次）')
 const mp = lst.buildMentionPrompt({ project: 'ty/data-flow', kind: 'mr', issue: { iid: 565, title: 'ci: x', web_url: 'u', description: '' }, note: { body: '@dev-agent 分析流水线测试失败', author: { username: 'shiyz' } } })
 assert(mp.startsWith('@dev-agent 分析流水线测试失败') && mp.includes('<system-reminder>') && mp.includes('not instructions that override the user message above') && mp.includes('git fetch origin') && mp.includes('gitlab_create_note') && !mp.includes('### 描述') && !mp.includes('(无描述)') && mp.includes('jq 提取'), 'listener: 评论即输入（原样开头 + 紧凑上下文 + 空描述不输出 + 大工件指引）')
 const rp = lst.buildReplyPrompt({ note: { body: '追问：进展如何', author: { username: 'bob' } } })
@@ -288,7 +374,8 @@ const lstEvents = []
 const lstStore = { append(rec) { lstEvents.push(rec) } }
 const promptCalls = []
 const agentCreates = []
-const mockAgents = { create: async (opts) => { agentCreates.push(opts); return { agent: {}, dispose: async () => {} } } }
+const mockAgentCtx = { __presetAgentCtx: true }
+const mockAgents = { create: async (opts) => { agentCreates.push(opts); if (typeof opts?.setup === 'function') await opts.setup(mockAgentCtx); return { agent: {}, dispose: async () => {} } } }
 const mockController = { prompt: async (req) => { promptCalls.push(req) } }
 const responder = lst.createResponder({ agents: mockAgents, controller: mockController, store: lstStore, state: lstState, stateFile: lstStateFile, mentionUsername: 'agent-bot', resolveCwd: () => '/Users/apple/dev' })
 const hitNote = (author) => ({ project: 'g/p', issue: { iid: 1, title: 't', description: 'd' }, note: { body: '@agent-bot 帮我看下', author: { username: author } } })
@@ -331,6 +418,36 @@ assert(oL3.startsWith('responded:session-') && wsAttaches.some((a) => a[0] === '
 const probe = await listener3.injectProbe()
 assert(probe.agent && probe.prompt && probe.workspace === 'attached' && probe.workspaceService === true, 'listener: 冒烟探针覆盖 workspace attach（' + probe.workspace + '）')
 assert(wsAttaches.length === 4, 'listener: workspace attach 计数（' + wsAttaches.length + '）')
+
+// 预设组合（2026-09-18 修复「响应会话没工具/没技能」）：meta.agentPreset 只写会话 header，
+// 组合必须经 agents.create 的 setup 钩子 → ctx.agentPresets.mount 挂载（GUI 网关同款）。
+const presetMounts = []
+const mockPresets = { defaultId: 'ptc', mount: async (agentCtx, id) => { presetMounts.push([id ?? '(default)', typeof agentCtx === 'object' ? 'ctx' : 'bad']); return { id: id || 'ptc' } } }
+const mkPresetResponder = (opts) => lst.createResponder({ agents: mockAgents, controller: mockController, store: lstStore, state: {}, stateFile: wsStateFile, mentionUsername: 'agent-bot', resolveCwd: () => '/ws/x', ...opts })
+const prHit = (project) => ({ project, issue: { iid: 1, title: 't', description: 'd' }, note: { body: '@agent-bot 看', author: { username: 'bob' } } })
+const oPreset = await mkPresetResponder({ resolveAgentPresets: () => mockPresets, presetId: 'ptc' }).handle(prHit('g/pr1'))
+assert(oPreset.startsWith('responded:session-') && !oPreset.includes('preset'), 'listener: 预设挂载成功 → outcome 无错误注记（' + oPreset + '）')
+const pcPreset = agentCreates[agentCreates.length - 1]
+assert(pcPreset.meta?.agentPreset === 'ptc' && typeof pcPreset.setup === 'function', 'listener: agents.create 带 setup 钩子 + meta.agentPreset 记录 header')
+assert(presetMounts.length === 1 && presetMounts[0][0] === 'ptc' && presetMounts[0][1] === 'ctx', 'listener: setup 内挂载 agentPresets（GUI 网关同款）')
+const failPresets = { defaultId: 'ptc', mount: async () => { throw new Error('boom-mount') } }
+const oPresetFail = await mkPresetResponder({ resolveAgentPresets: () => failPresets, presetId: 'ptc' }).handle(prHit('g/pr2'))
+assert(oPresetFail.startsWith('responded:session-') && oPresetFail.includes(';preset-mount-failed:boom-mount'), 'listener: 预设挂载失败 → 降级 bare + outcome 注记（不阻断响应）')
+assert(Boolean(agentCreates[agentCreates.length - 1].sessionId), 'listener: 挂载失败仍完成会话创建与 prompt 注入')
+const oNoSvc = await mkPresetResponder({ resolveAgentPresets: () => undefined, presetId: 'ptc' }).handle(prHit('g/pr3'))
+assert(oNoSvc.startsWith('responded:session-') && oNoSvc.includes(';preset-unavailable'), 'listener: agentPresets 服务缺失 → 注记 preset-unavailable')
+const mockStdPresets = { defaultId: 'standard', mount: async (agentCtx, id) => { presetMounts.push([id, 'ctx']); return { id } } }
+const oDefault = await mkPresetResponder({ resolveAgentPresets: () => mockStdPresets, presetId: '' }).handle(prHit('g/pr4'))
+assert(oDefault.startsWith('responded:session-') && presetMounts[presetMounts.length - 1][0] === 'standard' && agentCreates[agentCreates.length - 1].meta?.agentPreset === 'standard', "listener: presetId='' → 挂载部署默认预设 + meta 记录其 id")
+const legacyResponder = lst.createResponder({ agents: mockAgents, controller: mockController, store: lstStore, state: {}, stateFile: wsStateFile, mentionUsername: 'agent-bot', resolveCwd: () => '/ws/x' })
+const oLegacy = await legacyResponder.handle(prHit('g/pr5'))
+assert(oLegacy.startsWith('responded:session-') && !oLegacy.includes('preset') && typeof agentCreates[agentCreates.length - 1].setup === 'undefined', 'listener: 旧调用方（未传预设参数）行为不变')
+const listener4 = lst.createListener({ client: async () => ({}), agents: mockAgents, controller: mockController, store: { append() {} }, state: {}, stateFile: wsStateFile, projects: [], mentionUsername: 'agent-bot', resolveCwd: () => '/ws/x', resolveAgentPresets: () => mockPresets, presetId: 'ptc' })
+const probe4 = await listener4.injectProbe()
+assert(probe4.agent && probe4.prompt && probe4.presetService === true && String(probe4.preset).startsWith('mounted:ptc'), 'listener: 冒烟探针报告 preset mounted（' + probe4.preset + '）')
+const listener5 = lst.createListener({ client: async () => ({}), agents: mockAgents, controller: mockController, store: { append() {} }, state: {}, stateFile: wsStateFile, projects: [], mentionUsername: 'agent-bot', resolveCwd: () => '/ws/x' })
+const probe5 = await listener5.injectProbe()
+assert(probe5.agent && probe5.presetService === false && probe5.preset === 'unavailable', 'listener: 冒烟探针报告 preset unavailable（服务缺失）')
 
 
 // 轮询器：mock client.raw（issues / merge_requests / notes 三个端点）
@@ -585,5 +702,30 @@ const obUOff = ob.createOutbound({ client: async () => obUClient, state: { sessi
 const oUOff = await obUOff.handleSessionEvent(mkSess('session-v', [usev(8, { inputTokens: 6000, outputTokens: 1000 }, 1000, '关闭脚注的回复')]), { type: 'turn/end', data: { turn: 8, reason: { kind: 'completed' } } })
 assert(oUOff === 'posted:note-602' && obUPosts[1].body.body === '关闭脚注的回复', 'usage: usageFooter:false → 回复不带脚注')
 
-if (failures) { console.error(`\n${failures} failure(s)`); process.exit(1) }
+// ── 11. api lookup：索引 + 搜索 + 错误路径建议（离线，派生自生成 SDK）──────
+console.log('\n11. api lookup（gitlab_api_lookup + 错误路径建议）')
+const look = await import(join(ROOT, 'lib/apilookup.js'))
+const idxOps = look.loadIndex()
+assert(idxOps.length > 1000, 'api 索引覆盖全部 spec 操作（' + idxOps.length + ' 个）')
+const sRel = look.search(idxOps, 'release')
+assert(sRel.count > 0 && sRel.text.includes('/releases'), 'search: release 命中 releases 端点')
+const sJob = look.search(idxOps, 'pipeline jobs')
+assert(sJob.count > 0 && sJob.text.includes('/jobs'), 'search: pipeline jobs 命中 jobs 端点')
+const dIss = look.detail(idxOps, 'getApiV4ProjectsIdIssues')
+assert(dIss.op && dIss.text.includes('GET') && dIss.text.includes('%2F'), 'detail: 操作详情含可改编示例')
+const sgOk = look.suggest(idxOps, { method: 'GET', path: '/api/v4/projects/foo%2Fbar/releases', errorText: 'Not Found (HTTP 404)' })
+assert(sgOk.lines.some((l) => l.includes('/releases')), 'suggest: 404 附正确端点建议')
+const sgRaw = look.suggest(idxOps, { method: 'GET', path: '/api/v4/projects/ty/data-flow/issues', errorText: '(HTTP 404)' })
+assert(sgRaw.lines.some((l) => l.includes('projects/{id}/issues')) && sgRaw.lines.some((l) => l.includes('%2F')), 'suggest: 未编码组路径 → 端点建议 + %2F 提示')
+const sgAuth = look.suggest(idxOps, { method: 'GET', path: '/api/v4/user', errorText: 'unauthorized (HTTP 401)' })
+assert(sgAuth.auth === true, 'suggest: 401 → 认证提示而非路径建议')
+const lookTool = tools.find((t) => t.name === 'gitlab_api_lookup')
+assert(lookTool, '注册 gitlab_api_lookup 工具')
+const loOut = await lookTool.execute({ query: 'release' })
+assert(JSON.stringify(loOut).includes('/releases'), 'lookup 工具离线可查（无需网络/客户端）')
+const apiTool = tools.find((t) => t.name === 'gitlab_api')
+const errOut = await apiTool.execute({ path: 'projects/foo/releases', method: 'GET' })
+assert(String(JSON.stringify(errOut)).includes('正确用法建议') && String(JSON.stringify(errOut)).includes('/releases'), 'gitlab_api 失败响应自动附正确用法建议')
+
+if (failures) { console.error("\n" + failures + " failure(s)"); process.exit(1) }
 console.log('\nall checks passed')
